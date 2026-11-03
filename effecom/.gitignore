@@ -1,0 +1,44 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+pip-wheel-metadata/
+build/
+dist/
+
+# Test, coverage, and type-checker output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Django and local database/uploads
+db.sqlite3
+db.sqlite3-*
+staticfiles/
+media/
+
+# Logs and local tooling
+*.log
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
