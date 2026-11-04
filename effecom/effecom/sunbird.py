@@ -1,13 +1,16 @@
 import re
 from threading import Lock
+from time import sleep
 
 import requests
 from django.conf import settings
 
 
 class SunbirdError(Exception):
-    def __init__(self, message, status_code=502):
+    def __init__(self, message, status_code=502, *, code=None, retry_after=None):
         self.status_code = status_code
+        self.code = code
+        self.retry_after = retry_after
         super().__init__(message)
 
 
@@ -119,7 +122,7 @@ def clear_auth_cache():
 
 def _request_with_auth_retry(method, endpoint, **kwargs):
     scheme, token = get_auth()
-    request_kwargs = {
+    base_kwargs = {
         **kwargs,
         "headers": {
             **kwargs.get("headers", {}),
@@ -128,37 +131,52 @@ def _request_with_auth_retry(method, endpoint, **kwargs):
         "timeout": kwargs.get("timeout", (5, 30)),
     }
 
-    try:
-        response = method(
-            f"{settings.SUNBIRD_BASE_URL}{endpoint}",
-            **request_kwargs,
-        )
-    except requests.Timeout as exc:
-        raise SunbirdError("Sunbird request timed out.", status_code=504) from exc
-    except requests.RequestException as exc:
-        raise SunbirdError("Could not connect to Sunbird.") from exc
+    def send(request_kwargs):
+        retries = 0
+        while True:
+            try:
+                response = method(
+                    f"{settings.SUNBIRD_BASE_URL}{endpoint}",
+                    **request_kwargs,
+                )
+            except requests.Timeout as exc:
+                raise SunbirdError(
+                    "Sunbird request timed out.",
+                    status_code=504,
+                    code="upstream_timeout",
+                ) from exc
+            except requests.ConnectionError as exc:
+                if retries >= 2:
+                    raise SunbirdError(
+                        "Could not connect to Sunbird.",
+                        code="upstream_unavailable",
+                    ) from exc
+                sleep(0.25 * (2**retries))
+                retries += 1
+                continue
+            except requests.RequestException as exc:
+                raise SunbirdError(
+                    "Could not connect to Sunbird.",
+                    code="upstream_unavailable",
+                ) from exc
+
+            if response.status_code not in {502, 503, 504} or retries >= 2:
+                return response
+            sleep(0.25 * (2**retries))
+            retries += 1
+
+    response = send(base_kwargs)
 
     if response.status_code == 401 and has_login_credentials():
         scheme, token = get_auth(force_refresh=True, rejected_token=token)
         retry_kwargs = {
-            **request_kwargs,
+            **base_kwargs,
             "headers": {
-                **request_kwargs["headers"],
+                **base_kwargs["headers"],
                 "Authorization": f"{scheme} {token}",
             },
         }
-        try:
-            response = method(
-                f"{settings.SUNBIRD_BASE_URL}{endpoint}",
-                **retry_kwargs,
-            )
-        except requests.Timeout as exc:
-            raise SunbirdError(
-                "Sunbird request timed out.",
-                status_code=504,
-            ) from exc
-        except requests.RequestException as exc:
-            raise SunbirdError("Could not connect to Sunbird.") from exc
+        response = send(retry_kwargs)
 
     return response, token
 
@@ -172,14 +190,6 @@ def post_task(endpoint, payload, timeout=(5, 30)):
         timeout=timeout,
     )
 
-    try:
-        result = response.json()
-    except ValueError as exc:
-        raise SunbirdError("Sunbird returned an invalid response.") from exc
-
-    if not isinstance(result, dict):
-        raise SunbirdError("Sunbird returned an invalid response.")
-
     if not response.ok:
         if response.status_code in {401, 403}:
             message = (
@@ -187,14 +197,49 @@ def post_task(endpoint, payload, timeout=(5, 30)):
                 if has_login_credentials()
                 else "Sunbird rejected the configured access token."
             )
-            raise SunbirdError(message, status_code=503)
-        status_code = 400 if response.status_code == 400 else 502
-        message = (
-            "Sunbird could not process this request."
-            if status_code == 400
-            else "Sunbird could not complete this request."
+            raise SunbirdError(
+                message,
+                status_code=503,
+                code="upstream_auth_failed",
+            )
+        if response.status_code == 429:
+            headers = getattr(response, "headers", {})
+            retry_after = headers.get("Retry-After")
+            if not isinstance(retry_after, str) or not re.fullmatch(
+                r"\d{1,5}", retry_after
+            ):
+                retry_after = None
+            raise SunbirdError(
+                "Sunbird is busy. Please retry shortly.",
+                status_code=503,
+                code="upstream_busy",
+                retry_after=retry_after,
+            )
+        if 400 <= response.status_code < 500:
+            raise SunbirdError(
+                "Sunbird could not process this request.",
+                status_code=422,
+                code="upstream_rejected",
+            )
+        raise SunbirdError(
+            "Sunbird could not complete this request.",
+            status_code=502,
+            code="upstream_unavailable",
         )
-        raise SunbirdError(message, status_code=status_code)
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise SunbirdError(
+            "Sunbird returned an invalid response.",
+            code="upstream_invalid_response",
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise SunbirdError(
+            "Sunbird returned an invalid response.",
+            code="upstream_invalid_response",
+        )
 
     return result
 

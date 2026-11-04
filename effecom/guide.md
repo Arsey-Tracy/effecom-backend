@@ -35,8 +35,27 @@ Run initial migrations and start Django:
 
 ```powershell
 python manage.py migrate
+python manage.py seed_languages
 python manage.py runserver
 ```
+
+## Render deployment
+
+Create a Render Web Service with this directory (`effecom`) as its **Root
+Directory**. Set the **Build Command** to `bash build.sh` and the **Start
+Command** to `gunicorn effecom.wsgi:application`. The build script installs
+the pinned requirements, collects static files, applies database migrations,
+and seeds the configured translation languages. Keep a persistent PostgreSQL
+database attached through `DATABASE_URL`; the local SQLite database is not a
+production persistence option on Render.
+
+Configure at least `DJANGO_DEBUG=false`, a unique secret `DJANGO_SECRET_KEY`,
+`DJANGO_ALLOWED_HOSTS` with the service hostname, `CORS_ALLOWED_ORIGINS` with
+the frontend origin, and Sunbird credentials in Render's environment settings.
+Do not set `GUEST_COOKIE_SECURE=false` in production; HTTPS is required for
+guest cookies. Run the deployment with the same environment variables on both
+build and runtime phases so static collection and migrations use the intended
+settings and database.
 
 With `SUNBIRD_USERNAME` and `SUNBIRD_PASSWORD` configured, the backend
 requests a form-encoded token from Sunbird's `/auth/token` endpoint on first
@@ -74,6 +93,39 @@ Sunbird detect the language, or provide a supported code such as `lug`.
 Sunbird supports translation directly between any supported language pair;
 the source and target cannot be the same. The response includes the translated
 text at `output.translated_text`.
+
+The versioned resource endpoints are also available:
+
+- `GET /api/v1/languages/?capability=translation` lists active translation
+  languages. `capability=stt` is empty until Sunbird's transcription contract
+  and supported-language list are verified.
+- `POST /api/v1/guest/session/` creates a signed guest session and sets an
+  HttpOnly `guest_token` cookie. Non-browser clients can send the signed token
+  in the `X-Guest-Token` header.
+- `GET /api/v1/guest/usage/` returns the guest session's current usage and
+  configured limits.
+- `POST /api/v1/translations/` creates a persisted translation record. A guest
+  must create a session first; signed-in users are supported as well.
+- `GET /api/v1/translations/` lists only the signed-in user's history.
+- `GET /api/v1/translations/{id}/` returns a record only to its owner.
+
+Guest translation requests default to 10 translations and 500 characters per
+translation per 24-hour session. Authenticated requests default to 200
+translations per rolling 24-hour period and 5,000 characters per translation.
+These limits and the guest session-creation cap are configurable using the
+`GUEST_*` and `AUTH_*` environment variables in `.env.example`. The guest IP
+and user-agent are stored only as keyed hashes.
+Guest burst throttling is per session (or per IP before a session exists);
+the anonymous API throttle also limits requests by IP.
+
+Run `python manage.py seed_languages` after migrations and whenever the
+configured translation language list changes. It seeds the checked-in
+language fixture, enables translation only for configured languages, and
+leaves speech-to-text disabled pending provider verification.
+
+Versioned resource endpoints use errors shaped as
+`{"error":{"code":"...","message":"...","details":{}}}`. Translation text is
+sent to Sunbird for processing; do not submit confidential or sensitive text.
 
 The browser offers automatic source-language detection and only the language
 codes supported by Sunbird translation. The configured translation read

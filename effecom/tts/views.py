@@ -21,7 +21,10 @@ class TextToSpeechView(APIView):
         try:
             result = post_task("/tasks/audio/speech", payload)
         except SunbirdError as exc:
-            return Response({"error": str(exc)}, status=exc.status_code)
+            response = Response({"error": str(exc)}, status=exc.status_code)
+            if exc.retry_after:
+                response["Retry-After"] = exc.retry_after
+            return response
 
         if request.user.is_authenticated:
             Activity.objects.create(

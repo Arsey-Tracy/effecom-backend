@@ -98,6 +98,46 @@ class TextToSpeechApiTests(APITestCase):
             {"error": "Sunbird could not complete this request."},
         )
 
+    @patch("effecom.sunbird.sleep")
+    @patch("effecom.sunbird.requests.post")
+    def test_transient_upstream_error_is_retried(self, post, sleep):
+        result = {"audio_url": "https://audio.example/result.mp3"}
+        post.side_effect = [
+            Mock(ok=False, status_code=503),
+            Mock(ok=True, json=Mock(return_value=result)),
+        ]
+
+        response = self.client.post(
+            "/api/v1/tts/",
+            {"text": "Oli otya?", "language": "lug", "voice": "Namuli"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once_with(0.25)
+
+    @patch("effecom.sunbird.requests.post")
+    def test_upstream_rate_limit_is_safe_and_preserves_retry_after(self, post):
+        post.return_value = Mock(
+            ok=False,
+            status_code=429,
+            headers={"Retry-After": "30"},
+        )
+
+        response = self.client.post(
+            "/api/v1/tts/",
+            {"text": "Oli otya?", "language": "lug", "voice": "Namuli"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response["Retry-After"], "30")
+        self.assertEqual(
+            response.data,
+            {"error": "Sunbird is busy. Please retry shortly."},
+        )
+
     @patch("effecom.sunbird.requests.post")
     def test_upstream_auth_error_is_actionable_without_exposing_details(self, post):
         post.return_value = Mock(

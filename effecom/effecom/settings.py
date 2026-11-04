@@ -110,11 +110,39 @@ SUNBIRD_ACCESS_TOKEN = os.environ.get("SUNBIRD_ACCESS_TOKEN", "")
 SUNBIRD_USERNAME = os.environ.get("SUNBIRD_USERNAME", "")
 SUNBIRD_PASSWORD = os.environ.get("SUNBIRD_PASSWORD", "")
 SUNBIRD_AUTH_SCHEME = os.environ.get("SUNBIRD_AUTH_SCHEME", "Bearer")
-SUNBIRD_BASE_URL = "https://api.sunbird.ai"
+SUNBIRD_BASE_URL = os.environ.get(
+    "SUNBIRD_BASE_URL", "https://api.sunbird.ai"
+).rstrip("/")
 SUNBIRD_MAX_TEXT_LENGTH = int(os.environ.get("SUNBIRD_MAX_TEXT_LENGTH", "2000"))
+SUNBIRD_MAX_TRANSLATE_CHARS = int(
+    os.environ.get("SUNBIRD_MAX_TRANSLATE_CHARS", "5000")
+)
 SUNBIRD_TRANSLATION_TIMEOUT_SECONDS = int(
     os.environ.get("SUNBIRD_TRANSLATION_TIMEOUT_SECONDS", "120")
 )
+GUEST_SESSION_LIFETIME_SECONDS = int(
+    os.environ.get("GUEST_SESSION_LIFETIME_SECONDS", str(24 * 60 * 60))
+)
+GUEST_SESSIONS_PER_IP_PER_DAY = int(
+    os.environ.get("GUEST_SESSIONS_PER_IP_PER_DAY", "10")
+)
+GUEST_LIMITS = {
+    "translations": int(os.environ.get("GUEST_TRANSLATION_LIMIT", "10")),
+    "translate_chars": int(os.environ.get("GUEST_TRANSLATION_CHAR_LIMIT", "500")),
+    "transcriptions": int(os.environ.get("GUEST_TRANSCRIPTION_LIMIT", "3")),
+    "audio_seconds": int(os.environ.get("GUEST_AUDIO_SECONDS_LIMIT", "30")),
+}
+AUTHENTICATED_LIMITS = {
+    "translations_per_day": int(
+        os.environ.get("AUTH_TRANSLATIONS_PER_DAY", "200")
+    ),
+    "translate_chars": int(
+        os.environ.get("AUTH_TRANSLATION_CHAR_LIMIT", "5000")
+    ),
+}
+GUEST_COOKIE_SECURE = os.environ.get(
+    "GUEST_COOKIE_SECURE", str(not DEBUG)
+).lower() == "true"
 SUNBIRD_TRANSLATION_SUPPORTED_LANGUAGES = frozenset(
     "ach adh afr aka alz amh bam bem ber bfa cgg dag dga din eng ewe ful gwr "
     "hau "
@@ -182,12 +210,14 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
+        "translation.authentication.GuestAuthentication",
     ],
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": os.environ.get("DRF_ANON_RATE", "20/hour"),
+        "guest-burst": os.environ.get("GUEST_BURST_RATE", "10/minute"),
     },
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",

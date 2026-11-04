@@ -3,8 +3,11 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from effecom.sunbird import SunbirdError, post_task
-from account.models import Activity
+from effecom.sunbird import SunbirdError
+from .api import QuotaExceeded
+from .guest import GuestSessionLimitExceeded, issue_guest_session, set_guest_cookie
+from .models import GuestSession
+from .services import translate
 from .serializers import TranslationRequestSerializer
 
 
@@ -14,28 +17,41 @@ class TranslationView(APIView):
     def post(self, request):
         serializer = TranslationRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        payload = dict(serializer.validated_data)
-        source_language = payload.get("source_language", "")
-        if not source_language:
-            payload.pop("source_language", None)
+        guest_session = request.auth
+        cookie_token = None
+        if not request.user.is_authenticated and not isinstance(
+            guest_session, GuestSession
+        ):
+            try:
+                guest_session, cookie_token = issue_guest_session(request)
+            except GuestSessionLimitExceeded:
+                return Response(
+                    {"error": "Guest session limit reached for this network."},
+                    status=429,
+                )
+
+        owner = request.user if request.user.is_authenticated else guest_session
 
         try:
-            result = post_task(
-                "/tasks/translate",
-                payload,
+            translation = translate(
+                owner,
+                serializer.validated_data,
                 timeout=(5, settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS),
             )
+        except QuotaExceeded as exc:
+            response = Response({"error": str(exc.detail)}, status=exc.status_code)
+            if cookie_token:
+                set_guest_cookie(response, cookie_token)
+            return response
         except SunbirdError as exc:
-            return Response({"error": str(exc)}, status=exc.status_code)
+            response = Response({"error": str(exc)}, status=exc.status_code)
+            if exc.retry_after:
+                response["Retry-After"] = exc.retry_after
+            if cookie_token:
+                set_guest_cookie(response, cookie_token)
+            return response
 
-        if request.user.is_authenticated:
-            Activity.objects.create(
-                user=request.user,
-                tool=Activity.Tool.TRANSLATION,
-                text=serializer.validated_data["text"],
-                source_language=source_language,
-                target_language=serializer.validated_data["target_language"],
-                result=result,
-            )
-
-        return Response(result)
+        response = Response(translation.provider_response)
+        if cookie_token:
+            set_guest_cookie(response, cookie_token)
+        return response
