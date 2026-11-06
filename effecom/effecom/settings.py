@@ -42,7 +42,8 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "account",
-    "tts",
+    "tts", "stt",
+    
     "translation",
     "whitenoise"
 ]
@@ -117,6 +118,24 @@ SUNBIRD_AUTH_SCHEME = os.environ.get("SUNBIRD_AUTH_SCHEME", "Bearer")
 SUNBIRD_BASE_URL = os.environ.get(
     "SUNBIRD_BASE_URL", "https://api.sunbird.ai"
 ).rstrip("/")
+SUNBIRD_CONNECT_TIMEOUT_SECONDS = int(
+    os.environ.get("SUNBIRD_CONNECT_TIMEOUT_SECONDS", "10")
+)
+SUNBIRD_AUTH_TIMEOUT_SECONDS = int(
+    os.environ.get("SUNBIRD_AUTH_TIMEOUT_SECONDS", "30")
+)
+SUNBIRD_TTS_TIMEOUT_SECONDS = int(
+    os.environ.get("SUNBIRD_TTS_TIMEOUT_SECONDS", "120")
+)
+SUNBIRD_STT_TIMEOUT_SECONDS = int(
+    os.environ.get("SUNBIRD_STT_TIMEOUT_SECONDS", "180")
+)
+SUNBIRD_MAX_AUDIO_SIZE_BYTES = int(
+    os.environ.get("SUNBIRD_MAX_AUDIO_SIZE_BYTES", str(25 * 1024 * 1024))
+)
+SUNBIRD_MAX_AUDIO_SECONDS = int(
+    os.environ.get("SUNBIRD_MAX_AUDIO_SECONDS", "300")
+)
 SUNBIRD_MAX_TEXT_LENGTH = int(os.environ.get("SUNBIRD_MAX_TEXT_LENGTH", "2000"))
 SUNBIRD_MAX_TRANSLATE_CHARS = int(
     os.environ.get("SUNBIRD_MAX_TRANSLATE_CHARS", "5000")
@@ -147,6 +166,31 @@ AUTHENTICATED_LIMITS = {
 GUEST_COOKIE_SECURE = os.environ.get(
     "GUEST_COOKIE_SECURE", str(not DEBUG)
 ).lower() == "true"
+CSRF_COOKIE_SECURE = os.environ.get(
+    "CSRF_COOKIE_SECURE", str(not DEBUG)
+).lower() == "true"
+CSRF_COOKIE_SAMESITE = os.environ.get(
+    "CSRF_COOKIE_SAMESITE", "Lax" if DEBUG else "None"
+).capitalize()
+if CSRF_COOKIE_SAMESITE not in {"Lax", "Strict", "None"}:
+    raise ImproperlyConfigured(
+        "CSRF_COOKIE_SAMESITE must be Lax, Strict, or None."
+    )
+if CSRF_COOKIE_SAMESITE == "None" and not CSRF_COOKIE_SECURE:
+    raise ImproperlyConfigured(
+        "CSRF_COOKIE_SECURE must be true when CSRF_COOKIE_SAMESITE is None."
+    )
+GUEST_COOKIE_SAMESITE = os.environ.get(
+    "GUEST_COOKIE_SAMESITE", "Lax" if DEBUG else "None"
+).capitalize()
+if GUEST_COOKIE_SAMESITE not in {"Lax", "Strict", "None"}:
+    raise ImproperlyConfigured(
+        "GUEST_COOKIE_SAMESITE must be Lax, Strict, or None."
+    )
+if GUEST_COOKIE_SAMESITE == "None" and not GUEST_COOKIE_SECURE:
+    raise ImproperlyConfigured(
+        "GUEST_COOKIE_SECURE must be true when GUEST_COOKIE_SAMESITE is None."
+    )
 SUNBIRD_TRANSLATION_SUPPORTED_LANGUAGES = frozenset(
     "ach adh afr aka alz amh bam bem ber bfa cgg dag dga din eng ewe ful gwr "
     "hau "
@@ -191,6 +235,13 @@ SUNBIRD_TTS_VOICES = tuple(
     for language, voice in [pair.split(":", 1)]
     if language.strip() and voice.strip()
 )
+SUNBIRD_STT_LANGUAGES = tuple(
+    dict.fromkeys(
+        language.strip().lower()
+        for language in os.environ.get("SUNBIRD_STT_LANGUAGES", "lug").split(",")
+        if len(language.strip()) == 3 and language.strip().isalpha()
+    )
+)
 
 
 # CORS and CSRF settings
@@ -198,7 +249,7 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000",
+        "http://localhost:3000,http://127.0.0.1:3000,https://effecom.vercel.app",
     ).split(",")
     if origin.strip()
 ]
@@ -208,7 +259,6 @@ CSRF_TRUSTED_ORIGINS.append("https://effecom-backend.onrender.com")
 if render_external_hostname:
     CSRF_TRUSTED_ORIGINS.append(f"https://{render_external_hostname}")
 SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
 
 # Django REST Framework configuration
 REST_FRAMEWORK = {

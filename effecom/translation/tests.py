@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.management import call_command
@@ -53,7 +54,7 @@ class TranslationApiTests(APITestCase):
             post.call_args.kwargs["headers"]["Authorization"],
             "Bearer test-token",
         )
-        self.assertEqual(post.call_args.kwargs["timeout"], (5, 120))
+        self.assertEqual(post.call_args.kwargs["timeout"], (10, 120))
 
     @patch("effecom.sunbird.requests.post")
     def test_signed_in_translation_is_saved_to_account_history(self, post):
@@ -163,6 +164,42 @@ class TranslationV1ApiTests(APITestCase):
     def setUp(self):
         cache.clear()
 
+    @patch("translation.services.post_task")
+    def test_language_detection_uses_sunbird_and_returns_its_result(self, post_task):
+        result = {"language": "lug"}
+        post_task.return_value = result
+
+        response = self.client.post(
+            "/api/v1/language-detection/",
+            {"text": "Nze ndi mukwano gwa Tracy"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, result)
+        post_task.assert_called_once_with(
+            "/tasks/language_id",
+            {"text": "Nze ndi mukwano gwa Tracy"},
+            timeout=(10, 120),
+        )
+
+    @patch("translation.services.post_task")
+    def test_language_detection_rejects_empty_or_oversized_text(self, post_task):
+        empty_response = self.client.post(
+            "/api/v1/language-detection/",
+            {"text": "   "},
+            format="json",
+        )
+        oversized_response = self.client.post(
+            "/api/v1/language-detection/",
+            {"text": "x" * 2001},
+            format="json",
+        )
+
+        self.assertEqual(empty_response.status_code, 400)
+        self.assertEqual(oversized_response.status_code, 400)
+        post_task.assert_not_called()
+
     def create_guest_session(self, client=None):
         client = client or self.client
         response = client.post("/api/v1/guest/session/", {}, format="json")
@@ -180,14 +217,25 @@ class TranslationV1ApiTests(APITestCase):
         self.assertEqual(usage.data["translations_used"], 0)
         self.assertEqual(usage.data["translations_limit"], 10)
 
-    def test_language_catalog_filters_capability_and_keeps_stt_disabled(self):
+    @override_settings(GUEST_COOKIE_SAMESITE="None", GUEST_COOKIE_SECURE=True)
+    def test_guest_session_supports_cross_site_frontend_cookie(self):
+        response = self.create_guest_session()
+
+        guest_cookie = response.cookies["guest_token"]
+        self.assertEqual(guest_cookie["samesite"], "None")
+        self.assertTrue(guest_cookie["secure"])
+        self.assertTrue(guest_cookie["httponly"])
+
+    def test_language_catalog_filters_configured_capabilities(self):
         response = self.client.get("/api/v1/languages/?capability=translation")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("lug", {language["code"] for language in response.data})
         stt_response = self.client.get("/api/v1/languages/?capability=stt")
-        self.assertEqual(stt_response.data, [])
-        self.assertFalse(Language.objects.filter(supports_stt=True).exists())
+        self.assertEqual(
+            {language["code"] for language in stt_response.data},
+            set(settings.SUNBIRD_STT_LANGUAGES),
+        )
 
     @patch("translation.services.post_task")
     def test_guest_translation_consumes_quota_and_returns_record(self, post_task):

@@ -58,6 +58,12 @@ class TranslationRequestSerializer(serializers.Serializer):
         return attrs
 
 
+class LanguageDetectionRequestSerializer(serializers.Serializer):
+    text = serializers.CharField(
+        trim_whitespace=True, max_length=settings.SUNBIRD_MAX_TEXT_LENGTH
+    )
+
+
 class LanguageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Language

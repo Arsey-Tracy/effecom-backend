@@ -17,11 +17,12 @@ from .models import GuestSession, Language, TranslationRequest
 from .permissions import GuestBurstThrottle, IsUserOrGuest
 from .serializers import (
     GuestUsageSerializer,
+    LanguageDetectionRequestSerializer,
     LanguageSerializer,
     TranslationCreateSerializer,
     TranslationSerializer,
 )
-from .services import translate
+from .services import detect_language, translate
 
 
 class TranslationPagination(PageNumberPagination):
@@ -45,6 +46,17 @@ class LanguageListView(V1APIView):
         elif capability == "stt":
             languages = languages.filter(supports_stt=True)
         return Response(LanguageSerializer(languages, many=True).data)
+
+
+class LanguageDetectionView(V1APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [GuestBurstThrottle]
+
+    def post(self, request):
+        serializer = LanguageDetectionRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = detect_language(serializer.validated_data["text"])
+        return Response(result)
 
 
 class GuestSessionView(V1APIView):

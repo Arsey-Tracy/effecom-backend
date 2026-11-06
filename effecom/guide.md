@@ -1,8 +1,9 @@
-# EFFECOM backend: DRF, Sunbird translation, and text-to-speech
+# EFFECOM backend: DRF, Sunbird speech, and translation
 
 This backend iteration uses Django REST Framework for guest-accessible text
-translation and text-to-speech (TTS), plus session-based accounts and private
-per-user activity history. Speech-to-text and video captions are not included.
+translation, speech-to-text (STT), and text-to-speech (TTS), plus
+session-based accounts and private per-user activity history. Video captions
+are not included.
 
 ## Setup
 
@@ -43,17 +44,24 @@ python manage.py runserver
 
 Create a Render Web Service with this directory (`effecom`) as its **Root
 Directory**. Set the **Build Command** to `bash build.sh` and the **Start
-Command** to `gunicorn effecom.wsgi:application`. The build script installs
-the pinned requirements, collects static files, applies database migrations,
-and seeds the configured translation languages. Keep a persistent PostgreSQL
+Command** to `gunicorn --timeout 180 effecom.wsgi:application`. The build
+script installs the pinned requirements, collects static files, applies
+database migrations, and seeds the configured translation languages. Keep a persistent PostgreSQL
 database attached through `DATABASE_URL`; the local SQLite database is not a
 production persistence option on Render.
 
 Configure at least `DJANGO_DEBUG=false`, a unique secret `DJANGO_SECRET_KEY`,
 `DJANGO_ALLOWED_HOSTS` with the service hostname, `CORS_ALLOWED_ORIGINS` with
-the frontend origin, and Sunbird credentials in Render's environment settings.
+the frontend origin (`https://effecom.vercel.app`), and Sunbird credentials in
+Render's environment settings.
 Do not set `GUEST_COOKIE_SECURE=false` in production; HTTPS is required for
-guest cookies. Run the deployment with the same environment variables on both
+guest cookies. Production defaults `GUEST_COOKIE_SAMESITE` to `None` so the
+guest-session cookie can be sent when the frontend and backend are on different
+sites; this requires the secure cookie setting. The CSRF cookie follows the
+same production default through `CSRF_COOKIE_SAMESITE` and
+`CSRF_COOKIE_SECURE`. Local development defaults both cookies to `Lax`. Set
+`CORS_ALLOWED_ORIGINS` to the exact frontend origin; it also configures trusted
+CSRF origins. Run the deployment with the same environment variables on both
 build and runtime phases so static collection and migrations use the intended
 settings and database.
 
@@ -72,7 +80,8 @@ must remain server-side.
 
 ## API
 
-Both endpoints accept JSON `POST` requests, are available to guest users, and
+Translation and TTS endpoints accept JSON `POST` requests, while STT accepts a
+multipart upload. All are available to guest users and
 are rate-limited by DRF's anonymous-user throttle. They validate input before
 making server-to-server requests to Sunbird. The Sunbird token is never sent
 to the browser.
@@ -94,11 +103,15 @@ Sunbird supports translation directly between any supported language pair;
 the source and target cannot be the same. The response includes the translated
 text at `output.translated_text`.
 
+`POST /api/v1/language-detection/` accepts `{"text":"..."}` and returns
+Sunbird's language-identification result. It uses the same text-size limit and
+guest burst throttle as the other translation APIs.
+
 The versioned resource endpoints are also available:
 
 - `GET /api/v1/languages/?capability=translation` lists active translation
-  languages. `capability=stt` is empty until Sunbird's transcription contract
-  and supported-language list are verified.
+  languages. `capability=stt` lists languages enabled by
+  `SUNBIRD_STT_LANGUAGES`.
 - `POST /api/v1/guest/session/` creates a signed guest session and sets an
   HttpOnly `guest_token` cookie. Non-browser clients can send the signed token
   in the `X-Guest-Token` header.
@@ -119,9 +132,8 @@ Guest burst throttling is per session (or per IP before a session exists);
 the anonymous API throttle also limits requests by IP.
 
 Run `python manage.py seed_languages` after migrations and whenever the
-configured translation language list changes. It seeds the checked-in
-language fixture, enables translation only for configured languages, and
-leaves speech-to-text disabled pending provider verification.
+configured language lists change. It seeds the checked-in language fixture
+and updates translation, STT, and TTS capability flags from configuration.
 
 Versioned resource endpoints use errors shaped as
 `{"error":{"code":"...","message":"...","details":{}}}`. Translation text is
@@ -130,8 +142,8 @@ sent to Sunbird for processing; do not submit confidential or sensitive text.
 The browser offers automatic source-language detection and only the language
 codes supported by Sunbird translation. The configured translation read
 timeout defaults to 120 seconds (`SUNBIRD_TRANSLATION_TIMEOUT_SECONDS`) to
-allow for model inference; connect timeout remains 5 seconds. Use complete,
-reasonably short sentences for better quality.
+allow for model inference; the connection timeout defaults to 10 seconds. Use
+complete, reasonably short sentences for better quality.
 
 ### Text-to-speech
 
@@ -150,16 +162,47 @@ Sunbird's `/tasks/audio/speech` endpoint. The JSON response is passed through
 for playback by the frontend, which renders an audio player when the provider
 returns an audio URL.
 
+### Speech-to-text
+
+`POST /api/v1/stt/` accepts a `multipart/form-data` upload with fields
+`audio` (WAV) and `language` (a configured three-letter
+language code, Luganda by default). The backend sends the audio and language to
+Sunbird's `/tasks/audio/transcriptions` endpoint and returns its
+`audio_transcription` result. A guest session must be created first; signed-in
+requests are added to the user's activity history.
+
+Guest requests are limited by both the configured transcription count and
+audio duration. Audio duration is read from the uploaded file and rounded up
+to whole seconds. The defaults are 3 transcriptions and 30 total audio seconds
+per guest session. Uploads are limited to 25 MiB and 300 seconds by default.
+Configure supported languages with `SUNBIRD_STT_LANGUAGES`, maximum upload
+size/duration with `SUNBIRD_MAX_AUDIO_SIZE_BYTES` and
+`SUNBIRD_MAX_AUDIO_SECONDS`, and the provider response timeout with
+`SUNBIRD_STT_TIMEOUT_SECONDS`.
+
 ### Validation and provider configuration
 
 - `SUNBIRD_MAX_TEXT_LENGTH` caps text input (default `2000` characters).
+- `SUNBIRD_CONNECT_TIMEOUT_SECONDS` configures the connection timeout for
+  Sunbird requests (default `10` seconds).
+- `SUNBIRD_AUTH_TIMEOUT_SECONDS` configures the response timeout for token
+  login and authentication checks (default `30` seconds).
+- `SUNBIRD_TTS_TIMEOUT_SECONDS` configures the TTS response timeout (default
+  `120` seconds).
+- `SUNBIRD_STT_TIMEOUT_SECONDS` configures the STT response timeout (default
+  `180` seconds).
 - `SUNBIRD_TRANSLATION_TIMEOUT_SECONDS` configures the translation read
   timeout (default `120` seconds).
+- Set the production application-server and any proxy timeouts longer than
+  the expected maximum request duration. The example Gunicorn timeout is
+  `180` seconds to accommodate token login and slow Sunbird inference.
 - `SUNBIRD_TRANSLATION_LANGUAGES` is a comma-separated allowlist of language
   codes. Codes not supported by Sunbird translation are ignored with a
   startup warning. By default it lists Sunbird's documented translation
   languages, and requests may translate between any two configured languages.
 - `SUNBIRD_TTS_VOICES` is a comma-separated list such as `lug:Namuli`.
+- `SUNBIRD_STT_LANGUAGES` is a comma-separated allowlist of verified STT
+  language codes (defaults to `lug`).
 - Verify voice/language combinations using Sunbird's authenticated
   `GET /tasks/voice/speakers?language=lug` endpoint before adding them.
 - Tokens use the `token_type` returned by Sunbird's login endpoint. The
@@ -181,15 +224,16 @@ registration, login, logout, or another authenticated POST:
 - `GET /api/v1/auth/me/` — return the signed-in account.
 - `GET /api/v1/account/history/` — return up to 20 recent activities for the
   signed-in account.
-- `GET /api/v1/auth/options/` — return currently configured languages and
-  TTS voices for the tool forms.
+- `GET /api/v1/auth/options/` — return currently configured languages, STT
+  languages, and TTS voices for the tool forms.
 
 For browser requests, include cookies (`credentials: "include"`) and send the
 CSRF token in the `X-CSRFToken` header for state-changing requests. Credentialed
 CORS and trusted CSRF origins are configured from `CORS_ALLOWED_ORIGINS`.
-Translation and TTS remain guest-accessible; successful requests are added to
-history only when the request belongs to a signed-in user. History access is
-private to the authenticated account.
+Translation, STT, and TTS remain guest-accessible; successful requests are
+added to history only when the request belongs to a signed-in user. History
+access is private to the authenticated account. Uploaded audio is sent to
+Sunbird for processing; do not submit confidential or sensitive recordings.
 
 Provider errors are returned with safe messages; provider response details,
 credentials, and submitted text are not logged. Timeout, invalid provider

@@ -64,7 +64,10 @@ def get_auth(force_refresh=False, rejected_token=None):
                     "password": settings.SUNBIRD_PASSWORD,
                 },
                 headers={"accept": "application/json"},
-                timeout=(5, 15),
+                timeout=(
+                    settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+                    settings.SUNBIRD_AUTH_TIMEOUT_SECONDS,
+                ),
             )
         except requests.Timeout as exc:
             raise SunbirdError(
@@ -128,12 +131,24 @@ def _request_with_auth_retry(method, endpoint, **kwargs):
             **kwargs.get("headers", {}),
             "Authorization": f"{scheme} {token}",
         },
-        "timeout": kwargs.get("timeout", (5, 30)),
+        "timeout": kwargs.get("timeout")
+        or (
+            settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+            settings.SUNBIRD_TTS_TIMEOUT_SECONDS,
+        ),
     }
 
     def send(request_kwargs):
         retries = 0
         while True:
+            for file_value in request_kwargs.get("files", {}).values():
+                file_obj = (
+                    file_value[1]
+                    if isinstance(file_value, tuple)
+                    else file_value
+                )
+                if hasattr(file_obj, "seek"):
+                    file_obj.seek(0)
             try:
                 response = method(
                     f"{settings.SUNBIRD_BASE_URL}{endpoint}",
@@ -181,7 +196,7 @@ def _request_with_auth_retry(method, endpoint, **kwargs):
     return response, token
 
 
-def post_task(endpoint, payload, timeout=(5, 30)):
+def post_task(endpoint, payload, timeout=None):
     response, _ = _request_with_auth_retry(
         requests.post,
         endpoint,
@@ -190,6 +205,23 @@ def post_task(endpoint, payload, timeout=(5, 30)):
         timeout=timeout,
     )
 
+    return _task_result(response)
+
+
+def post_file_task(endpoint, *, files, data, timeout=None):
+    response, _ = _request_with_auth_retry(
+        requests.post,
+        endpoint,
+        headers={"accept": "application/json"},
+        files=files,
+        data=data,
+        timeout=timeout,
+    )
+
+    return _task_result(response)
+
+
+def _task_result(response):
     if not response.ok:
         if response.status_code in {401, 403}:
             message = (
@@ -249,7 +281,10 @@ def check_authentication():
     response, _ = _request_with_auth_retry(
         requests.get,
         "/auth/me",
-        timeout=(5, 15),
+        timeout=(
+            settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+            settings.SUNBIRD_AUTH_TIMEOUT_SECONDS,
+        ),
     )
 
     if response.status_code in {401, 403}:

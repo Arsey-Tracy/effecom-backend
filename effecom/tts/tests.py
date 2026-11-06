@@ -45,6 +45,7 @@ class TextToSpeechApiTests(APITestCase):
                 "response_mode": "url",
             },
         )
+        self.assertEqual(post.call_args.kwargs["timeout"], (10, 120))
 
     @patch("effecom.sunbird.requests.post")
     def test_unconfigured_voice_is_rejected(self, post):
@@ -215,6 +216,8 @@ class TextToSpeechApiTests(APITestCase):
                 "password": "test-password",
             },
         )
+        self.assertEqual(login_call.kwargs["timeout"], (10, 30))
+        self.assertEqual(speech_call.kwargs["timeout"], (10, 120))
         self.assertNotIn(
             "password",
             speech_call.kwargs["headers"]["Authorization"],
@@ -306,7 +309,7 @@ class CheckSunbirdCommandTests(APITestCase):
         get.assert_called_once_with(
             "https://api.sunbird.ai/auth/me",
             headers={"Authorization": "Bearer test-token"},
-            timeout=(5, 15),
+            timeout=(10, 30),
         )
 
     @override_settings(

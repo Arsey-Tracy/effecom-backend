@@ -13,6 +13,7 @@ class User(AbstractUser):
 class Activity(models.Model):
     class Tool(models.TextChoices):
         TTS = "tts", "Text-to-Speech"
+        STT = "stt", "Speech-to-Text"
         TRANSLATION = "translation", "Translation"
 
     user = models.ForeignKey(

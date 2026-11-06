@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from rest_framework.test import APITestCase
 
 from .models import Activity
@@ -44,6 +44,10 @@ class AccountApiTests(APITestCase):
         self.assertNotIn("fra", codes)
         self.assertNotIn("kpo", codes)
         self.assertNotIn("lth", codes)
+        self.assertEqual(
+            {language["code"] for language in response.data["stt_languages"]},
+            set(settings.SUNBIRD_STT_LANGUAGES),
+        )
 
     def test_activity_history_is_scoped_to_signed_in_user(self):
         other_user = get_user_model().objects.create_user(
@@ -97,6 +101,14 @@ class AccountApiTests(APITestCase):
             client.get("/api/v1/auth/me/").status_code,
             200,
         )
+
+    @override_settings(CSRF_COOKIE_SAMESITE="None", CSRF_COOKIE_SECURE=True)
+    def test_csrf_cookie_supports_cross_site_frontend(self):
+        response = self.client.get("/api/v1/auth/csrf/")
+
+        csrf_cookie = response.cookies["csrftoken"]
+        self.assertEqual(csrf_cookie["samesite"], "None")
+        self.assertTrue(csrf_cookie["secure"])
 
     def test_registration_requires_csrf_token(self):
         client = Client(enforce_csrf_checks=True)

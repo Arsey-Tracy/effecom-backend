@@ -57,7 +57,7 @@ def set_guest_cookie(response, token):
         max_age=settings.GUEST_SESSION_LIFETIME_SECONDS,
         httponly=True,
         secure=settings.GUEST_COOKIE_SECURE,
-        samesite="Lax",
+        samesite=settings.GUEST_COOKIE_SAMESITE,
         path="/api/v1/",
     )
     return response

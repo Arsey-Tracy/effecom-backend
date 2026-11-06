@@ -36,7 +36,10 @@ class TranslationView(APIView):
             translation = translate(
                 owner,
                 serializer.validated_data,
-                timeout=(5, settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS),
+                timeout=(
+                    settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+                    settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS,
+                ),
             )
         except QuotaExceeded as exc:
             response = Response({"error": str(exc.detail)}, status=exc.status_code)

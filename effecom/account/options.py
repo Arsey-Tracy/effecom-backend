@@ -19,10 +19,15 @@ class ToolOptionsView(APIView):
             {"language": language, "name": name}
             for language, name in settings.SUNBIRD_TTS_VOICES
         ]
+        stt_languages = [
+            {"code": code, "name": LANGUAGE_NAMES.get(code, code.upper())}
+            for code in settings.SUNBIRD_STT_LANGUAGES
+        ]
         return Response(
             {
                 "languages": languages,
                 "voices": voices,
+                "stt_languages": stt_languages,
                 "max_text_length": settings.SUNBIRD_MAX_TEXT_LENGTH,
             }
         )

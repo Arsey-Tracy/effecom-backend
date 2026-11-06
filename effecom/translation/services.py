@@ -13,6 +13,18 @@ from .api import QuotaExceeded
 from .models import GuestSession, TranslationRequest
 
 
+def detect_language(text, *, timeout=None):
+    return post_task(
+        "/tasks/language_id",
+        {"text": text},
+        timeout=timeout
+        or (
+            settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+            settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS,
+        ),
+    )
+
+
 def _reserve_translation(owner, text, source_language, target_language):
     now = timezone.now()
     request_fields = {
@@ -110,7 +122,10 @@ def translate(owner, validated_data, *, timeout=None):
             "/tasks/translate",
             payload,
             timeout=timeout
-            or (5, settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS),
+            or (
+                settings.SUNBIRD_CONNECT_TIMEOUT_SECONDS,
+                settings.SUNBIRD_TRANSLATION_TIMEOUT_SECONDS,
+            ),
         )
     except SunbirdError as exc:
         _mark_failed(row, guest_id, f"upstream_{exc.status_code}")
