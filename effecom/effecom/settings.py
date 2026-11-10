@@ -42,8 +42,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "account",
-    "tts", "stt",
-    
+    "tts", 
+    "stt",
+    "profiles",
+    "settings",
+    "captions",
     "translation",
     "whitenoise"
 ]
@@ -166,6 +169,20 @@ AUTHENTICATED_LIMITS = {
 GUEST_COOKIE_SECURE = os.environ.get(
     "GUEST_COOKIE_SECURE", str(not DEBUG)
 ).lower() == "true"
+SESSION_COOKIE_SECURE = os.environ.get(
+    "SESSION_COOKIE_SECURE", str(not DEBUG)
+).lower() == "true"
+SESSION_COOKIE_SAMESITE = os.environ.get(
+    "SESSION_COOKIE_SAMESITE", "Lax" if DEBUG else "None"
+).capitalize()
+if SESSION_COOKIE_SAMESITE not in {"Lax", "Strict", "None"}:
+    raise ImproperlyConfigured(
+        "SESSION_COOKIE_SAMESITE must be Lax, Strict, or None."
+    )
+if SESSION_COOKIE_SAMESITE == "None" and not SESSION_COOKIE_SECURE:
+    raise ImproperlyConfigured(
+        "SESSION_COOKIE_SECURE must be true when SESSION_COOKIE_SAMESITE is None."
+    )
 CSRF_COOKIE_SECURE = os.environ.get(
     "CSRF_COOKIE_SECURE", str(not DEBUG)
 ).lower() == "true"
@@ -258,7 +275,6 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 CSRF_TRUSTED_ORIGINS.append("https://effecom-backend.onrender.com")
 if render_external_hostname:
     CSRF_TRUSTED_ORIGINS.append(f"https://{render_external_hostname}")
-SESSION_COOKIE_SECURE = not DEBUG
 
 # Django REST Framework configuration
 REST_FRAMEWORK = {

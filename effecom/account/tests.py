@@ -33,6 +33,20 @@ class AccountApiTests(APITestCase):
         response = self.client.get("/api/v1/account/history/")
         self.assertIn(response.status_code, (401, 403))
 
+    def test_authenticated_user_can_update_profile_name(self):
+        self.client.force_authenticate(self.user)
+
+        response = self.client.patch(
+            "/api/v1/auth/me/",
+            {"first_name": "Updated"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["first_name"], "Updated")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Updated")
+
     def test_tool_options_only_list_supported_translation_languages(self):
         response = self.client.get("/api/v1/auth/options/")
 

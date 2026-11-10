@@ -54,16 +54,16 @@ Configure at least `DJANGO_DEBUG=false`, a unique secret `DJANGO_SECRET_KEY`,
 `DJANGO_ALLOWED_HOSTS` with the service hostname, `CORS_ALLOWED_ORIGINS` with
 the frontend origin (`https://effecom.vercel.app`), and Sunbird credentials in
 Render's environment settings.
-Do not set `GUEST_COOKIE_SECURE=false` in production; HTTPS is required for
-guest cookies. Production defaults `GUEST_COOKIE_SAMESITE` to `None` so the
-guest-session cookie can be sent when the frontend and backend are on different
-sites; this requires the secure cookie setting. The CSRF cookie follows the
-same production default through `CSRF_COOKIE_SAMESITE` and
-`CSRF_COOKIE_SECURE`. Local development defaults both cookies to `Lax`. Set
-`CORS_ALLOWED_ORIGINS` to the exact frontend origin; it also configures trusted
-CSRF origins. Run the deployment with the same environment variables on both
-build and runtime phases so static collection and migrations use the intended
-settings and database.
+Do not set `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, or
+`GUEST_COOKIE_SECURE` to `false` in production; HTTPS is required for
+cross-site cookies. Production defaults all three cookie `SAMESITE` settings
+to `None`, which allows account sessions, CSRF, and guest sessions to work
+between the frontend and backend sites. Local development defaults them to
+`Lax`. If overriding these settings, `None` requires the matching `*_SECURE`
+setting to remain true. Set `CORS_ALLOWED_ORIGINS` to the exact frontend
+origin; it also configures trusted CSRF origins. Run the deployment with the
+same environment variables on both build and runtime phases so static
+collection and migrations use the intended settings and database.
 
 With `SUNBIRD_USERNAME` and `SUNBIRD_PASSWORD` configured, the backend
 requests a form-encoded token from Sunbird's `/auth/token` endpoint on first

@@ -72,6 +72,16 @@ class CurrentAccountView(APIView):
     def get(self, request):
         return Response(AccountSerializer(request.user).data)
 
+    def patch(self, request):
+        serializer = AccountSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
 
 class ActivityListView(APIView):
     permission_classes = [IsAuthenticated]
