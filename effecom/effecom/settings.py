@@ -3,8 +3,8 @@
 import os
 import warnings
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
 
+import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -82,11 +82,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "effecom.wsgi.application"
 
+database_url = os.environ.get("DATABASE_URL")
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default": (
+        dj_database_url.parse(database_url)
+        if database_url
+        else {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    )
 }
 
 AUTH_USER_MODEL = "account.User"
