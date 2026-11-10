@@ -44,7 +44,7 @@ python manage.py runserver
 
 Create a Render Web Service with this directory (`effecom`) as its **Root
 Directory**. Set the **Build Command** to `bash build.sh` and the **Start
-Command** to `gunicorn --timeout 180 effecom.wsgi:application`. The build
+Command** to `gunicorn --timeout 240 effecom.wsgi:application`. The build
 script installs the pinned requirements, collects static files, applies
 database migrations, and seeds the configured translation languages. Keep a persistent PostgreSQL
 database attached through `DATABASE_URL`; the local SQLite database is not a
