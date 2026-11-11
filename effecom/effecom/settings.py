@@ -2,6 +2,7 @@
 
 import os
 import warnings
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -40,6 +41,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "account",
     "tts", 
@@ -202,6 +204,30 @@ if CSRF_COOKIE_SAMESITE == "None" and not CSRF_COOKIE_SECURE:
     raise ImproperlyConfigured(
         "CSRF_COOKIE_SECURE must be true when CSRF_COOKIE_SAMESITE is None."
     )
+JWT_COOKIE_SECURE = os.environ.get(
+    "JWT_COOKIE_SECURE", str(not DEBUG)
+).lower() == "true"
+JWT_COOKIE_SAMESITE = os.environ.get(
+    "JWT_COOKIE_SAMESITE", "Lax" if DEBUG else "None"
+).capitalize()
+if JWT_COOKIE_SAMESITE not in {"Lax", "Strict", "None"}:
+    raise ImproperlyConfigured(
+        "JWT_COOKIE_SAMESITE must be Lax, Strict, or None."
+    )
+if JWT_COOKIE_SAMESITE == "None" and not JWT_COOKIE_SECURE:
+    raise ImproperlyConfigured(
+        "JWT_COOKIE_SECURE must be true when JWT_COOKIE_SAMESITE is None."
+    )
+JWT_ACCESS_COOKIE_NAME = "effecom_access"
+JWT_REFRESH_COOKIE_NAME = "effecom_refresh"
+JWT_ACCESS_COOKIE_PATH = "/api/v1/"
+JWT_REFRESH_COOKIE_PATH = "/api/v1/auth/"
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=10),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+}
 GUEST_COOKIE_SAMESITE = os.environ.get(
     "GUEST_COOKIE_SAMESITE", "Lax" if DEBUG else "None"
 ).capitalize()
@@ -287,6 +313,7 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "account.authentication.CookieJWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "translation.authentication.GuestAuthentication",
     ],

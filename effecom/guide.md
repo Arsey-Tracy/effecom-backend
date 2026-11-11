@@ -2,8 +2,8 @@
 
 This backend iteration uses Django REST Framework for guest-accessible text
 translation, speech-to-text (STT), and text-to-speech (TTS), plus
-session-based accounts and private per-user activity history. Video captions
-are not included.
+JWT-cookie-authenticated accounts and private per-user activity history. Video
+captions are not included.
 
 ## Setup
 
@@ -27,10 +27,10 @@ SQLite is used when `DATABASE_URL` is unset. Set `DATABASE_URL` to a
 PostgreSQL connection URL to use PostgreSQL. Before running in production, set
 `DJANGO_DEBUG=false`, a non-empty `DJANGO_SECRET_KEY`, the deployment's
 `DJANGO_ALLOWED_HOSTS`, and the frontend's `CORS_ALLOWED_ORIGINS`. The
-frontend defaults to `http://localhost:8000` for the API; set
-`NEXT_PUBLIC_EFFECOM_API_URL` when the backend runs elsewhere.
-Use the same hostname (`localhost` or `127.0.0.1`) for frontend and backend
-while developing so browser session cookies are sent consistently.
+browser calls the same-origin Next.js API proxy, which forwards API requests
+and authentication cookies to Django. Set `EFFECOM_BACKEND_URL` in the
+frontend environment when the backend runs somewhere other than the proxy's
+default (`http://localhost:8000` in development).
 
 Run initial migrations and start Django:
 
@@ -54,16 +54,15 @@ Configure at least `DJANGO_DEBUG=false`, a unique secret `DJANGO_SECRET_KEY`,
 `DJANGO_ALLOWED_HOSTS` with the service hostname, `CORS_ALLOWED_ORIGINS` with
 the frontend origin (`https://effecom.vercel.app`), and Sunbird credentials in
 Render's environment settings.
-Do not set `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, or
-`GUEST_COOKIE_SECURE` to `false` in production; HTTPS is required for
-cross-site cookies. Production defaults all three cookie `SAMESITE` settings
-to `None`, which allows account sessions, CSRF, and guest sessions to work
-between the frontend and backend sites. Local development defaults them to
-`Lax`. If overriding these settings, `None` requires the matching `*_SECURE`
-setting to remain true. Set `CORS_ALLOWED_ORIGINS` to the exact frontend
-origin; it also configures trusted CSRF origins. Run the deployment with the
-same environment variables on both build and runtime phases so static
-collection and migrations use the intended settings and database.
+Do not set `JWT_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, or `GUEST_COOKIE_SECURE`
+to `false` in production; HTTPS is required for cross-site cookies.
+`JWT_COOKIE_SAMESITE`, `CSRF_COOKIE_SAMESITE`, and `GUEST_COOKIE_SAMESITE`
+default to `None` in production and `Lax` in local development. If overriding
+these settings, `None` requires the matching `*_SECURE` setting to remain true. Set
+`CORS_ALLOWED_ORIGINS` to the exact frontend origin; it also configures trusted
+CSRF origins. Run the deployment with the same environment variables on both
+build and runtime phases so static collection and migrations use the intended
+settings and database.
 
 With `SUNBIRD_USERNAME` and `SUNBIRD_PASSWORD` configured, the backend
 requests a form-encoded token from Sunbird's `/auth/token` endpoint on first
@@ -213,23 +212,29 @@ size/duration with `SUNBIRD_MAX_AUDIO_SIZE_BYTES` and
 
 ### Accounts and activity
 
-Account endpoints use Django session cookies. Fetch a CSRF token before
-registration, login, logout, or another authenticated POST:
+Account endpoints use SimpleJWT access and refresh tokens in HttpOnly cookies.
+Fetch a CSRF token before registration, login, refresh, logout, or another
+authenticated state-changing request:
 
 - `GET /api/v1/auth/csrf/` — returns a CSRF token and sets the CSRF cookie.
 - `POST /api/v1/auth/register/` — create an account with `email`,
   `first_name`, and `password`; the new account is signed in.
 - `POST /api/v1/auth/login/` — sign in with `email` and `password`.
-- `POST /api/v1/auth/logout/` — end the current session.
+- `POST /api/v1/auth/token/refresh/` — renew the access cookie using the
+  refresh cookie.
+- `POST /api/v1/auth/logout/` — blacklist the refresh token and clear both
+  authentication cookies.
 - `GET /api/v1/auth/me/` — return the signed-in account.
 - `GET /api/v1/account/history/` — return up to 20 recent activities for the
   signed-in account.
 - `GET /api/v1/auth/options/` — return currently configured languages, STT
   languages, and TTS voices for the tool forms.
 
-For browser requests, include cookies (`credentials: "include"`) and send the
-CSRF token in the `X-CSRFToken` header for state-changing requests. Credentialed
-CORS and trusted CSRF origins are configured from `CORS_ALLOWED_ORIGINS`.
+For browser requests, include cookies and send the CSRF token in the
+`X-CSRFToken` header for state-changing requests. The frontend Axios client
+does this automatically, refreshes access tokens once after an unauthorized
+response, and retries the original request. Credentialed CORS and trusted CSRF
+origins are configured from `CORS_ALLOWED_ORIGINS`.
 Translation, STT, and TTS remain guest-accessible; successful requests are
 added to history only when the request belongs to a signed-in user. History
 access is private to the authenticated account. Uploaded audio is sent to
@@ -244,9 +249,8 @@ single Django process. If running multiple processes or hosts, use a shared
 token cache and distributed lock before enabling credential-based login in
 that deployment; do not schedule concurrent token-rotation jobs.
 
-The Django session and CSRF middleware remain enabled. Session-authenticated
-DRF requests enforce CSRF checks; the browser frontend obtains a CSRF token
-before state-changing requests.
+The Django session and CSRF middleware remain enabled. Cookie-authenticated JWT
+and legacy session-authenticated DRF writes enforce CSRF checks.
 
 ## Account model
 

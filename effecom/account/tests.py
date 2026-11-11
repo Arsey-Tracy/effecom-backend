@@ -93,7 +93,7 @@ class AccountApiTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["text"], "My message")
 
-    def test_csrf_bootstrap_and_registration_create_a_session(self):
+    def test_csrf_bootstrap_and_registration_set_jwt_cookies(self):
         client = Client(enforce_csrf_checks=True)
         csrf_response = client.get("/api/v1/auth/csrf/")
         token = csrf_response.json()["csrfToken"]
@@ -111,6 +111,10 @@ class AccountApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertNotIn("password", response.json())
+        self.assertIn("effecom_access", response.cookies)
+        self.assertIn("effecom_refresh", response.cookies)
+        self.assertTrue(response.cookies["effecom_access"]["httponly"])
+        self.assertTrue(response.cookies["effecom_refresh"]["httponly"])
         self.assertEqual(
             client.get("/api/v1/auth/me/").status_code,
             200,
@@ -139,7 +143,7 @@ class AccountApiTests(APITestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_login_with_email_creates_a_session(self):
+    def test_login_with_email_sets_jwt_cookies(self):
         csrf = self.client.get("/api/v1/auth/csrf/").json()["csrfToken"]
         response = self.client.post(
             "/api/v1/auth/login/",
@@ -151,7 +155,86 @@ class AccountApiTests(APITestCase):
             HTTP_X_CSRFTOKEN=csrf,
         )
         self.assertEqual(response.status_code, 200)
+        self.assertIn("effecom_access", response.cookies)
+        self.assertIn("effecom_refresh", response.cookies)
         self.assertEqual(
             self.client.get("/api/v1/auth/me/").status_code,
             200,
         )
+
+    def test_refresh_renews_access_cookie(self):
+        client = Client(enforce_csrf_checks=True)
+        csrf = client.get("/api/v1/auth/csrf/").json()["csrfToken"]
+        login = client.post(
+            "/api/v1/auth/login/",
+            {
+                "email": "member@example.com",
+                "password": "secure-member-password-239!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(login.status_code, 200)
+        csrf = client.cookies["csrftoken"].value
+
+        response = client.post(
+            "/api/v1/auth/token/refresh/",
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertIn("effecom_access", response.cookies)
+        self.assertEqual(client.get("/api/v1/auth/me/").status_code, 200)
+
+    def test_cookie_authenticated_mutations_require_csrf(self):
+        client = Client(enforce_csrf_checks=True)
+        csrf = client.get("/api/v1/auth/csrf/").json()["csrfToken"]
+        login = client.post(
+            "/api/v1/auth/login/",
+            {
+                "email": "member@example.com",
+                "password": "secure-member-password-239!",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(login.status_code, 200)
+
+        response = client.patch(
+            "/api/v1/auth/me/",
+            {"first_name": "Updated"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_logout_clears_and_blacklists_refresh_cookie(self):
+        csrf = self.client.get("/api/v1/auth/csrf/").json()["csrfToken"]
+        login = self.client.post(
+            "/api/v1/auth/login/",
+            {
+                "email": "member@example.com",
+                "password": "secure-member-password-239!",
+            },
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(login.status_code, 200)
+        refresh_token = self.client.cookies["effecom_refresh"].value
+
+        response = self.client.post(
+            "/api/v1/auth/logout/",
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.cookies["effecom_refresh"]["max-age"], 0)
+        self.client.cookies["effecom_refresh"] = refresh_token
+        refresh = self.client.post(
+            "/api/v1/auth/token/refresh/",
+            format="json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        self.assertEqual(refresh.status_code, 401)
