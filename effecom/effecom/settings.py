@@ -343,6 +343,13 @@ def _positive_int_setting(name, default):
     return value
 
 
+def _boolean_setting(name, default):
+    value = os.environ.get(name, str(default)).lower()
+    if value not in {"true", "false"}:
+        raise ImproperlyConfigured(f"{name} must be 'true' or 'false'.")
+    return value == "true"
+
+
 CAPTION_MAX_UPLOAD_MB = _positive_int_setting("CAPTION_MAX_UPLOAD_MB", 250)
 CAPTION_MAX_DURATION_MIN = _positive_int_setting("CAPTION_MAX_DURATION_MIN", 60)
 CAPTION_FFPROBE_TIMEOUT_SECONDS = _positive_int_setting(
@@ -366,6 +373,63 @@ if not CAPTION_ALLOWED_VIDEO_EXTENSIONS:
     raise ImproperlyConfigured(
         "CAPTION_ALLOWED_VIDEO_EXTENSIONS must contain at least one extension."
     )
+
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "base")
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "auto")
+WHISPER_BEAM_SIZE = _positive_int_setting("WHISPER_BEAM_SIZE", 5)
+WHISPER_VAD = _boolean_setting("WHISPER_VAD", True)
+CAPTION_WORD_TIMESTAMPS = _boolean_setting("CAPTION_WORD_TIMESTAMPS", False)
+CAPTION_STALE_JOB_MINUTES = _positive_int_setting(
+    "CAPTION_STALE_JOB_MINUTES", 15
+)
+CAPTION_HEARTBEAT_INTERVAL_SECONDS = _positive_int_setting(
+    "CAPTION_HEARTBEAT_INTERVAL_SECONDS", 30
+)
+CAPTION_PROGRESS_WRITE_INTERVAL_SECONDS = _positive_int_setting(
+    "CAPTION_PROGRESS_WRITE_INTERVAL_SECONDS", 3
+)
+CAPTION_TASK_MAX_RETRIES = _positive_int_setting("CAPTION_TASK_MAX_RETRIES", 2)
+CAPTION_TASK_RETRY_DELAY_SECONDS = _positive_int_setting(
+    "CAPTION_TASK_RETRY_DELAY_SECONDS", 60
+)
+CAPTION_TASK_SOFT_TIMEOUT_SECONDS = _positive_int_setting(
+    "CAPTION_TASK_SOFT_TIMEOUT_SECONDS", 21000
+)
+CAPTION_TASK_TIMEOUT_SECONDS = _positive_int_setting(
+    "CAPTION_TASK_TIMEOUT_SECONDS", 21600
+)
+CELERY_VISIBILITY_TIMEOUT_SECONDS = _positive_int_setting(
+    "CELERY_VISIBILITY_TIMEOUT_SECONDS", 25200
+)
+if CAPTION_TASK_SOFT_TIMEOUT_SECONDS >= CAPTION_TASK_TIMEOUT_SECONDS:
+    raise ImproperlyConfigured(
+        "CAPTION_TASK_SOFT_TIMEOUT_SECONDS must be lower than "
+        "CAPTION_TASK_TIMEOUT_SECONDS."
+    )
+if CELERY_VISIBILITY_TIMEOUT_SECONDS <= CAPTION_TASK_TIMEOUT_SECONDS:
+    raise ImproperlyConfigured(
+        "CELERY_VISIBILITY_TIMEOUT_SECONDS must exceed "
+        "CAPTION_TASK_TIMEOUT_SECONDS."
+    )
+
+CELERY_BROKER_URL = os.environ.get(
+    "CELERY_BROKER_URL", "redis://127.0.0.1:6379/0"
+)
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "visibility_timeout": CELERY_VISIBILITY_TIMEOUT_SECONDS,
+}
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_WORKER_CONCURRENCY = 1
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_SOFT_TIME_LIMIT = CAPTION_TASK_SOFT_TIMEOUT_SECONDS
+CELERY_TASK_TIME_LIMIT = CAPTION_TASK_TIMEOUT_SECONDS
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
 
 MAILERS = {
     "default": {
