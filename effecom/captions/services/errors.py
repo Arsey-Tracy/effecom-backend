@@ -1,0 +1,2 @@
+class MediaProcessingError(Exception):
+    pass

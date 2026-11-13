@@ -332,6 +332,41 @@ REST_FRAMEWORK = {
     ],
 }
 
+
+def _positive_int_setting(name, default):
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise ImproperlyConfigured(f"{name} must be a positive integer.") from exc
+    if value <= 0:
+        raise ImproperlyConfigured(f"{name} must be a positive integer.")
+    return value
+
+
+CAPTION_MAX_UPLOAD_MB = _positive_int_setting("CAPTION_MAX_UPLOAD_MB", 250)
+CAPTION_MAX_DURATION_MIN = _positive_int_setting("CAPTION_MAX_DURATION_MIN", 60)
+CAPTION_FFPROBE_TIMEOUT_SECONDS = _positive_int_setting(
+    "CAPTION_FFPROBE_TIMEOUT_SECONDS", 30
+)
+CAPTION_FFMPEG_TIMEOUT_SECONDS = _positive_int_setting(
+    "CAPTION_FFMPEG_TIMEOUT_SECONDS", 300
+)
+FFPROBE_BINARY = os.environ.get("FFPROBE_BINARY", "ffprobe")
+FFMPEG_BINARY = os.environ.get("FFMPEG_BINARY", "ffmpeg")
+CAPTION_ALLOWED_VIDEO_EXTENSIONS = tuple(
+    dict.fromkeys(
+        f".{extension.strip().lower().lstrip('.')}"
+        for extension in os.environ.get(
+            "CAPTION_ALLOWED_VIDEO_EXTENSIONS", "mp4,mov,mkv,webm"
+        ).split(",")
+        if extension.strip()
+    )
+)
+if not CAPTION_ALLOWED_VIDEO_EXTENSIONS:
+    raise ImproperlyConfigured(
+        "CAPTION_ALLOWED_VIDEO_EXTENSIONS must contain at least one extension."
+    )
+
 MAILERS = {
     "default": {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
