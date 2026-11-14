@@ -355,14 +355,11 @@ CAPTION_MAX_DURATION_MIN = _positive_int_setting("CAPTION_MAX_DURATION_MIN", 60)
 CAPTION_UPLOAD_TICKET_TTL_SECONDS = _positive_int_setting(
     "CAPTION_UPLOAD_TICKET_TTL_SECONDS", 300
 )
-CAPTION_FFPROBE_TIMEOUT_SECONDS = _positive_int_setting(
-    "CAPTION_FFPROBE_TIMEOUT_SECONDS", 30
-)
+# Media probing and audio extraction use PyAV, so no external FFmpeg/FFprobe
+# binaries are required. This value bounds audio decoding in the worker.
 CAPTION_FFMPEG_TIMEOUT_SECONDS = _positive_int_setting(
     "CAPTION_FFMPEG_TIMEOUT_SECONDS", 300
 )
-FFPROBE_BINARY = os.environ.get("FFPROBE_BINARY", "ffprobe")
-FFMPEG_BINARY = os.environ.get("FFMPEG_BINARY", "ffmpeg")
 CAPTION_ALLOWED_VIDEO_EXTENSIONS = tuple(
     dict.fromkeys(
         f".{extension.strip().lower().lstrip('.')}"
@@ -375,6 +372,16 @@ CAPTION_ALLOWED_VIDEO_EXTENSIONS = tuple(
 if not CAPTION_ALLOWED_VIDEO_EXTENSIONS:
     raise ImproperlyConfigured(
         "CAPTION_ALLOWED_VIDEO_EXTENSIONS must contain at least one extension."
+    )
+
+# Caption execution model:
+# - "inline": process videos in a background thread inside the web service.
+# - "celery": require a reachable Celery broker and a separate worker.
+# - "auto": use Celery when available, otherwise fall back to inline processing.
+CAPTION_EXECUTION_MODE = os.environ.get("CAPTION_EXECUTION_MODE", "auto").lower()
+if CAPTION_EXECUTION_MODE not in {"auto", "celery", "inline"}:
+    raise ImproperlyConfigured(
+        "CAPTION_EXECUTION_MODE must be 'auto', 'celery', or 'inline'."
     )
 
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "base")

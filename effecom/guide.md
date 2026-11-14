@@ -2,8 +2,10 @@
 
 This backend iteration uses Django REST Framework for guest-accessible text
 translation, speech-to-text (STT), and text-to-speech (TTS), plus
-JWT-cookie-authenticated accounts and private per-user activity history. Video
-captions are not included.
+JWT-cookie-authenticated accounts and private per-user activity history. It also
+provides authenticated video captioning: upload a video, extract its audio with
+PyAV, transcribe it locally with Faster-Whisper, and edit or export SRT/VTT
+captions.
 
 ## Setup
 
@@ -63,6 +65,61 @@ these settings, `None` requires the matching `*_SECURE` setting to remain true. 
 CSRF origins. Run the deployment with the same environment variables on both
 build and runtime phases so static collection and migrations use the intended
 settings and database.
+
+## Video captions in production
+
+Video captioning needs no external FFmpeg/FFprobe binaries: media probing and
+audio extraction use PyAV (the `av` package), which ships its own FFmpeg
+libraries. Audio is transcribed locally with Faster-Whisper; there is no
+third-party transcription API and no credential to configure.
+
+Set `CAPTION_EXECUTION_MODE` to control how work runs:
+
+- `inline` (recommended for a single Render web service): the process endpoint
+  starts a daemon thread in the web process, returns `202`, and the frontend
+  polls the video resource for progress. No Redis or separate worker is
+  required.
+- `auto` (default): use Celery when `CELERY_BROKER_URL` is reachable, otherwise
+  fall back to inline processing.
+- `celery`: require a reachable broker and a separately running worker
+  (`celery -A effecom worker -l info`). Use this when transcription must be
+  isolated from request-serving capacity.
+
+Required Render environment variables for captions:
+
+- `CAPTION_EXECUTION_MODE` — `inline`, `auto`, or `celery`.
+- `CELERY_BROKER_URL` — only when using `celery`, or when a worker is deployed.
+- `WHISPER_MODEL_SIZE`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`,
+  `WHISPER_LANGUAGE` — optional model settings. The default `base`/`cpu`/`int8`
+  model downloads on first use; keep the service's disk and memory sufficient
+  for the chosen model.
+- `CAPTION_MAX_UPLOAD_MB`, `CAPTION_MAX_DURATION_MIN`,
+  `CAPTION_ALLOWED_VIDEO_EXTENSIONS` — optional limits.
+
+Inline processing runs on the web service, so a long or large video consumes
+that service's CPU and memory. For heavier workloads, deploy a separate worker
+with `CAPTION_EXECUTION_MODE=celery`, set `CELERY_BROKER_URL` to a managed Redis
+or Render Key Value instance, and run `celery -A effecom worker`. The worker must
+have the same `DATABASE_URL` and `WHISPER_*` settings as the web service.
+
+Jobs that stop unexpectedly (process restart, lost worker) are marked failed by
+`python manage.py recover_stale_caption_jobs` once their heartbeat exceeds
+`CAPTION_STALE_JOB_MINUTES`. Run it periodically (for example from an external
+cron or Render cron job). Failed videos can be retried from
+`POST /api/v1/videos/{id}/process/`; the status claim and `get_or_create` on the
+caption track make retries idempotent.
+
+Uploaded videos are stored on the local filesystem (`MEDIA_ROOT`). Render's
+default disk is ephemeral, so attach a persistent disk mounted at `MEDIA_ROOT`
+or move `STORAGES["default"]` to object storage if videos must survive restarts
+and be served by more than one web instance. PostgreSQL remains the source of
+truth for video and caption records; the caption fix never deletes either.
+
+Provider and configuration failures (missing Faster-Whisper/PyAV modules, model
+load errors, invalid video files, transcription errors) mark the video `failed`
+with a safe `error_message`; they are never reported as successful captions.
+Provider exception details are logged by type only, never with credentials or
+media contents.
 
 With `SUNBIRD_USERNAME` and `SUNBIRD_PASSWORD` configured, the backend
 requests a form-encoded token from Sunbird's `/auth/token` endpoint on first

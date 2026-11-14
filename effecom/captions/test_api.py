@@ -318,6 +318,7 @@ class CaptionApiTests(APITestCase):
         self.assertEqual(failed.status, Video.Status.QUEUED)
         self.assertEqual(failed.error_message, "")
 
+    @override_settings(CAPTION_EXECUTION_MODE="celery")
     def test_processing_rejects_disallowed_states_and_handles_broker_failure(self):
         with patch("captions.services.videos.transcribe_video.delay") as enqueue:
             response = self.client.post(
@@ -339,9 +340,107 @@ class CaptionApiTests(APITestCase):
                 format="json",
             )
         self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.data["error"]["code"],
+            "caption_queue_unavailable",
+        )
         self.assertNotIn("private broker address", str(response.data))
         queued.refresh_from_db()
         self.assertEqual(queued.status, Video.Status.FAILED)
+
+    @override_settings(CAPTION_EXECUTION_MODE="inline")
+    def test_inline_mode_starts_a_background_thread_without_celery(self):
+        queued = self._make_video(self.user, status=Video.Status.UPLOADED)
+        with patch(
+            "captions.services.videos.transcribe_video.delay"
+        ) as enqueue, patch(
+            "captions.services.videos.Thread"
+        ) as thread_class:
+            response = self.client.post(
+                f"/api/v1/videos/{queued.pk}/process/",
+                {},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        enqueue.assert_not_called()
+        thread_class.return_value.start.assert_called_once()
+        queued.refresh_from_db()
+        self.assertEqual(queued.status, Video.Status.QUEUED)
+
+    def test_broker_failure_falls_back_to_inline_processing(self):
+        queued = self._make_video(self.user, status=Video.Status.UPLOADED)
+        with patch(
+            "captions.services.videos.transcribe_video.delay",
+            side_effect=OperationalError("private broker address"),
+        ), patch(
+            "captions.services.videos.Thread"
+        ) as thread_class:
+            response = self.client.post(
+                f"/api/v1/videos/{queued.pk}/process/",
+                {},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        thread_class.return_value.start.assert_called_once()
+        queued.refresh_from_db()
+        self.assertEqual(queued.status, Video.Status.QUEUED)
+        self.assertEqual(queued.error_message, "")
+
+    @override_settings(CAPTION_EXECUTION_MODE="inline")
+    def test_missing_transcription_engine_returns_a_safe_503(self):
+        queued = self._make_video(self.user, status=Video.Status.UPLOADED)
+        with patch(
+            "captions.services.videos.caption_prerequisites_available",
+            return_value=False,
+        ), patch("captions.services.videos.Thread") as thread_class:
+            response = self.client.post(
+                f"/api/v1/videos/{queued.pk}/process/",
+                {},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.data["error"]["code"],
+            "caption_processing_unavailable",
+        )
+        thread_class.assert_not_called()
+        queued.refresh_from_db()
+        self.assertEqual(queued.status, Video.Status.FAILED)
+
+    def test_upload_rejects_malformed_ticket_authorization(self):
+        response = APIClient().post(
+            "/api/v1/videos/upload/",
+            {"file": SimpleUploadedFile("clip.mp4", b"video")},
+            format="multipart",
+            HTTP_AUTHORIZATION="CaptionUpload",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_deleted_user_tickets_and_videos_are_removed(self):
+        ticket_response = self.client.post(
+            "/api/v1/videos/upload-ticket/",
+            {},
+            format="json",
+        )
+        token = ticket_response.data["ticket"]
+        user_id = self.user.pk
+        video_pk = self.video.pk
+
+        self.user.delete()
+
+        self.assertFalse(Video.objects.filter(pk=video_pk).exists())
+        self.assertFalse(CaptionUploadTicket.objects.filter(user_id=user_id).exists())
+        response = APIClient().post(
+            "/api/v1/videos/upload/",
+            {"file": SimpleUploadedFile("clip.mp4", b"video")},
+            format="multipart",
+            HTTP_AUTHORIZATION=f"CaptionUpload {token}",
+        )
+        self.assertEqual(response.status_code, 401)
 
     def test_caption_patch_preserves_untouched_segments_and_checks_version(self):
         response = self.client.get(

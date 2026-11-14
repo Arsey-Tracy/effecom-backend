@@ -19,6 +19,7 @@ from captions.models import CaptionTrack, Video
 from captions.services.errors import (
     MediaProcessingError,
     RetryableTranscriptionError,
+    TranscriptionError,
     TranscriptionModelError,
 )
 from captions.services.pipeline import _make_progress_callback
@@ -28,7 +29,7 @@ from captions.services.transcription_engine import (
     _load_model,
     transcribe_audio,
 )
-from captions.tasks import transcribe_video
+from captions.tasks import run_caption_job_inline, transcribe_video
 
 
 def whisper_options(**overrides):
@@ -360,6 +361,17 @@ class CaptionTaskTests(TestCase):
         self.assertEqual(CaptionTrack.objects.filter(video=self.video).count(), 1)
         self.fake_model.transcribe.assert_called_once()
 
+    def test_inline_runner_completes_and_is_idempotent(self):
+        self.assertEqual(run_caption_job_inline(str(self.video.pk)), "completed")
+
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.status, Video.Status.COMPLETED)
+        self.assertEqual(CaptionTrack.objects.filter(video=self.video).count(), 1)
+
+        self.assertEqual(run_caption_job_inline(str(self.video.pk)), "skipped")
+        self.assertEqual(CaptionTrack.objects.filter(video=self.video).count(), 1)
+        self.fake_model.transcribe.assert_called_once()
+
     def test_transient_failure_requeues_and_can_be_retried(self):
         with patch(
             "captions.tasks.process_video",
@@ -378,6 +390,65 @@ class CaptionTaskTests(TestCase):
         self.assertEqual(transcribe_video.run(str(self.video.pk)), "completed")
         self.video.refresh_from_db()
         self.assertEqual(self.video.status, Video.Status.COMPLETED)
+
+
+class InlineCaptionJobPolicyTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = get_user_model().objects.create_user(
+            username="inline-caption@example.com",
+            email="inline-caption@example.com",
+            password="test-password",
+        )
+        self.video = Video.objects.create(
+            user=self.user,
+            title="Inline job",
+            original_video="captions/videos/inline.mp4",
+            status=Video.Status.QUEUED,
+            heartbeat_at=timezone.now(),
+        )
+
+    def test_deleted_video_is_skipped_without_error(self):
+        video_id = self.video.pk
+        self.video.delete()
+
+        self.assertEqual(run_caption_job_inline(str(video_id)), "skipped")
+
+    def test_provider_error_marks_failed_without_leaking_details(self):
+        with patch(
+            "captions.tasks.process_video",
+            side_effect=TranscriptionError("private provider detail"),
+        ):
+            with self.assertRaises(TranscriptionError):
+                run_caption_job_inline(str(self.video.pk))
+
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.status, Video.Status.FAILED)
+        self.assertEqual(
+            self.video.error_message,
+            "Transcription could not be completed. Please retry the job.",
+        )
+        self.assertNotIn("private provider detail", self.video.error_message)
+
+    def test_missing_model_config_retries_then_fails_safely(self):
+        with patch(
+            "captions.tasks.process_video",
+            side_effect=TranscriptionModelError("private model-cache path"),
+        ) as process:
+            with self.assertRaises(TranscriptionModelError):
+                run_caption_job_inline(str(self.video.pk))
+
+        self.assertEqual(
+            process.call_count,
+            settings.CAPTION_TASK_MAX_RETRIES + 1,
+        )
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.status, Video.Status.FAILED)
+        self.assertEqual(
+            self.video.error_message,
+            "The transcription model could not be loaded. Please try again later.",
+        )
+        self.assertNotIn("private model-cache path", self.video.error_message)
 
 
 class StaleCaptionJobTests(TestCase):

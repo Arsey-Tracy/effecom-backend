@@ -1,5 +1,9 @@
+import importlib.util
+import logging
 from pathlib import PurePosixPath
+from threading import Thread
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import F
@@ -8,16 +12,22 @@ from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 
 from captions.models import CaptionTrack, Video
-from captions.tasks import transcribe_video
+from captions.tasks import run_caption_job_inline, transcribe_video
 from captions.validators import validate_caption_segments
 
 from .errors import (
+    CaptionProcessingUnavailable,
     CaptionStorageError,
     CaptionVersionConflict,
     TaskQueueUnavailable,
     VideoStateConflict,
 )
 from .video_probe import validate_video_upload
+
+
+logger = logging.getLogger(__name__)
+
+_TRANSCRIPTION_REQUIREMENTS = ("faster_whisper", "av")
 
 
 def create_video(*, user, uploaded_file, title=None):
@@ -61,6 +71,90 @@ def delete_video(video):
     video.delete()
 
 
+def caption_prerequisites_available():
+    return all(
+        importlib.util.find_spec(module) is not None
+        for module in _TRANSCRIPTION_REQUIREMENTS
+    )
+
+
+def _fail_unqueued(video_id, message):
+    now = timezone.now()
+    return Video.objects.filter(
+        pk=video_id,
+        status=Video.Status.QUEUED,
+    ).update(
+        status=Video.Status.FAILED,
+        stage="Failed",
+        error_message=message,
+        finished_at=now,
+        heartbeat_at=now,
+        updated_at=now,
+    )
+
+
+def _start_inline(video_id):
+    if not caption_prerequisites_available():
+        _fail_unqueued(
+            video_id,
+            "Caption processing is unavailable because the transcription "
+            "engine is not installed.",
+        )
+        logger.error(
+            "Caption transcription engine is unavailable.",
+            extra={"video_id": str(video_id), "stage": "preflight"},
+        )
+        raise CaptionProcessingUnavailable
+    thread = Thread(
+        target=run_caption_job_inline,
+        args=(str(video_id),),
+        daemon=True,
+        name=f"caption-inline-{video_id}",
+    )
+    thread.start()
+    logger.info(
+        "Caption job started inline.",
+        extra={"video_id": str(video_id), "stage": "dispatched"},
+    )
+
+
+def _dispatch_caption_job(video_id):
+    mode = settings.CAPTION_EXECUTION_MODE
+    if mode == "inline":
+        _start_inline(video_id)
+        return
+    try:
+        transcribe_video.delay(str(video_id))
+        logger.info(
+            "Caption job queued for Celery.",
+            extra={"video_id": str(video_id), "stage": "dispatched"},
+        )
+    except (KombuOperationalError, RedisError, OSError) as exc:
+        if mode == "celery":
+            _fail_unqueued(
+                video_id,
+                "The transcription job could not be queued. Please retry.",
+            )
+            logger.error(
+                "Celery broker unavailable.",
+                extra={
+                    "video_id": str(video_id),
+                    "stage": "dispatched",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise TaskQueueUnavailable from exc
+        logger.warning(
+            "Celery broker unavailable; processing caption job inline.",
+            extra={
+                "video_id": str(video_id),
+                "stage": "dispatched",
+                "error_type": type(exc).__name__,
+            },
+        )
+        _start_inline(video_id)
+
+
 def queue_video(video):
     with transaction.atomic():
         queued_video = (
@@ -94,22 +188,7 @@ def queue_video(video):
             )
         )
 
-    try:
-        transcribe_video.delay(str(queued_video.pk))
-    except (KombuOperationalError, RedisError, OSError) as exc:
-        now = timezone.now()
-        Video.objects.filter(
-            pk=queued_video.pk,
-            status=Video.Status.QUEUED,
-        ).update(
-            status=Video.Status.FAILED,
-            stage="Failed",
-            error_message="The transcription job could not be queued. Please retry.",
-            finished_at=now,
-            heartbeat_at=now,
-            updated_at=now,
-        )
-        raise TaskQueueUnavailable from exc
+    _dispatch_caption_job(queued_video.pk)
     return Video.objects.get(pk=queued_video.pk, user_id=video.user_id)
 
 

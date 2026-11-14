@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import skipUnless
@@ -272,11 +273,29 @@ class MediaServiceTests(SimpleTestCase):
 
         self.assertFalse(temporary_audio_path.exists())
 
-    def test_audio_extraction_reports_ffmpeg_failure(self):
+    def test_audio_extraction_reports_decoder_failure(self):
         with patch(
-            "captions.services.audio_extractor.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 1, "", "error"),
+            "captions.services.audio_extractor.av.open",
+            side_effect=OSError("private decoder path"),
         ):
             with self.assertRaises(MediaProcessingError):
                 with extract_audio(self.video_path):
                     self.fail("Audio extraction should not yield after a failure.")
+
+
+class PyAVExtractionTests(SimpleTestCase):
+    def test_extract_audio_uses_pyav_and_produces_mono_16khz_wav(self):
+        with tempfile.TemporaryDirectory(prefix="caption-pyav-") as directory:
+            source = Path(directory) / "source.wav"
+            with wave.open(str(source), "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                wav.writeframes(b"\x00\x00\x00\x00" * 4410)
+
+            with extract_audio(source) as audio_path:
+                with wave.open(str(audio_path), "rb") as extracted:
+                    self.assertEqual(extracted.getnchannels(), 1)
+                    self.assertEqual(extracted.getframerate(), 16000)
+                    self.assertEqual(extracted.getsampwidth(), 2)
+                    self.assertGreater(extracted.getnframes(), 0)

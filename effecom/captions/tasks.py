@@ -87,37 +87,61 @@ def _requeue_for_retry(video_id):
     )
 
 
-@shared_task(bind=True, acks_late=True, reject_on_worker_lost=True)
-def transcribe_video(self, video_id):
+def _mark_retrying(video_id):
     now = timezone.now()
-    claimed = Video.objects.filter(
+    return Video.objects.filter(
         pk=video_id,
-        status=Video.Status.QUEUED,
+        status__in=_ACTIVE_STATUSES,
     ).update(
         status=Video.Status.EXTRACTING_AUDIO,
-        stage="Extracting audio",
-        progress=0,
+        stage="Retrying",
         error_message="",
-        started_at=now,
-        finished_at=None,
         heartbeat_at=now,
         updated_at=now,
     )
-    if not claimed:
+
+
+def _claim_for_processing(video_id):
+    now = timezone.now()
+    return bool(
+        Video.objects.filter(
+            pk=video_id,
+            status=Video.Status.QUEUED,
+        ).update(
+            status=Video.Status.EXTRACTING_AUDIO,
+            stage="Extracting audio",
+            progress=0,
+            error_message="",
+            started_at=now,
+            finished_at=None,
+            heartbeat_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _start_heartbeat(video_id):
+    stop_event = Event()
+    heartbeat_thread = Thread(
+        target=_update_heartbeat,
+        args=(video_id, stop_event),
+        name=f"caption-heartbeat-{video_id}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    return stop_event, heartbeat_thread
+
+
+@shared_task(bind=True, acks_late=True, reject_on_worker_lost=True)
+def transcribe_video(self, video_id):
+    if not _claim_for_processing(video_id):
         logger.info(
             "Skipping duplicate or inactive caption task.",
             extra={"video_id": str(video_id)},
         )
         return "skipped"
 
-    heartbeat_stop = Event()
-    heartbeat_thread = Thread(
-        target=_update_heartbeat,
-        args=(video_id, heartbeat_stop),
-        name=f"caption-heartbeat-{video_id}",
-        daemon=True,
-    )
-    heartbeat_thread.start()
+    heartbeat_stop, heartbeat_thread = _start_heartbeat(video_id)
     try:
         completed = process_video(video_id)
         return "completed" if completed else "inactive"
@@ -160,3 +184,60 @@ def transcribe_video(self, video_id):
         heartbeat_thread.join(
             timeout=settings.CAPTION_HEARTBEAT_INTERVAL_SECONDS + 1
         )
+        close_old_connections()
+
+
+def run_caption_job_inline(video_id):
+    """Run a caption job in-process for deployments without a Celery worker."""
+    if not _claim_for_processing(video_id):
+        logger.info(
+            "Skipping duplicate or inactive inline caption job.",
+            extra={"video_id": str(video_id)},
+        )
+        return "skipped"
+
+    heartbeat_stop, heartbeat_thread = _start_heartbeat(video_id)
+    attempt = 0
+    try:
+        while True:
+            try:
+                completed = process_video(video_id)
+                return "completed" if completed else "inactive"
+            except RetryableTranscriptionError as exc:
+                if attempt < settings.CAPTION_TASK_MAX_RETRIES:
+                    attempt += 1
+                    if _mark_retrying(video_id):
+                        logger.warning(
+                            "Retrying inline caption job after a transient error.",
+                            extra={
+                                "video_id": str(video_id),
+                                "retry": attempt,
+                                "error_type": type(exc).__name__,
+                            },
+                        )
+                        continue
+                _mark_failed(video_id, _safe_error_message(exc))
+                logger.exception(
+                    "Inline caption job failed after retries.",
+                    extra={
+                        "video_id": str(video_id),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                raise
+            except Exception as exc:
+                _mark_failed(video_id, _safe_error_message(exc))
+                logger.exception(
+                    "Inline caption job failed.",
+                    extra={
+                        "video_id": str(video_id),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                raise
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(
+            timeout=settings.CAPTION_HEARTBEAT_INTERVAL_SECONDS + 1
+        )
+        close_old_connections()

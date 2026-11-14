@@ -1,3 +1,4 @@
+import logging
 import tempfile
 import time
 from pathlib import Path
@@ -13,6 +14,9 @@ from .audio_extractor import extract_audio
 from .errors import MediaProcessingError
 from .transcription_engine import WhisperOptions, transcribe_audio
 from .video_probe import probe_video
+
+
+logger = logging.getLogger(__name__)
 
 
 def _copy_original_video(video, destination):
@@ -68,10 +72,22 @@ def process_video(video_id):
     if video.status != Video.Status.EXTRACTING_AUDIO:
         return False
 
+    logger.info(
+        "Caption processing started.",
+        extra={"video_id": str(video_id), "stage": "start"},
+    )
     with tempfile.TemporaryDirectory(prefix="caption-video-") as directory:
         local_video = Path(directory) / "source-video"
         _copy_original_video(video, local_video)
         probe = probe_video(local_video)
+        logger.info(
+            "Video inspected.",
+            extra={
+                "video_id": str(video_id),
+                "stage": "probe",
+                "duration_seconds": round(probe.duration_seconds, 3),
+            },
+        )
 
         max_duration = settings.CAPTION_MAX_DURATION_MIN * 60
         if probe.duration_seconds > max_duration:
@@ -85,6 +101,10 @@ def process_video(video_id):
             ).update(duration=probe.duration_seconds, updated_at=timezone.now())
 
         with extract_audio(local_video) as audio_path:
+            logger.info(
+                "Audio extracted.",
+                extra={"video_id": str(video_id), "stage": "extract_audio"},
+            )
             now = timezone.now()
             transitioned = Video.objects.filter(
                 pk=video_id,
@@ -107,6 +127,15 @@ def process_video(video_id):
                 vad_filter=settings.WHISPER_VAD,
                 word_timestamps=settings.CAPTION_WORD_TIMESTAMPS,
             )
+            logger.info(
+                "Transcription started.",
+                extra={
+                    "video_id": str(video_id),
+                    "stage": "transcribe",
+                    "model_size": options.model_size,
+                    "device": options.device,
+                },
+            )
             result = transcribe_audio(
                 audio_path,
                 duration_seconds=probe.duration_seconds,
@@ -114,6 +143,15 @@ def process_video(video_id):
                 progress_callback=_make_progress_callback(video_id),
             )
             validate_caption_segments(result.segments, probe.duration_seconds)
+            logger.info(
+                "Transcription completed.",
+                extra={
+                    "video_id": str(video_id),
+                    "stage": "transcribe",
+                    "segment_count": len(result.segments),
+                    "detected_language": result.language,
+                },
+            )
 
         now = timezone.now()
         transitioned = Video.objects.filter(
@@ -158,4 +196,12 @@ def process_video(video_id):
                 "updated_at",
             )
         )
+    logger.info(
+        "Caption processing completed.",
+        extra={
+            "video_id": str(video_id),
+            "stage": "completed",
+            "language": language,
+        },
+    )
     return True

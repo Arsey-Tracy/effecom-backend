@@ -23,6 +23,7 @@ from .serializers import (
     VideoUploadSerializer,
 )
 from .services.errors import (
+    CaptionProcessingUnavailable,
     CaptionStorageError,
     CaptionVersionConflict,
     TaskQueueUnavailable,
@@ -75,6 +76,12 @@ class CaptionStorageUnavailableResponse(exceptions.APIException):
     status_code = 503
     default_code = "caption_storage_unavailable"
     default_detail = "Video storage is temporarily unavailable."
+
+
+class CaptionProcessingUnavailableResponse(exceptions.APIException):
+    status_code = 503
+    default_code = "caption_processing_unavailable"
+    default_detail = "Video caption processing is temporarily unavailable."
 
 
 def _owned_video_or_404(user, video_id):
@@ -224,6 +231,8 @@ class VideoProcessView(CaptionAPIView):
             raise VideoConflict() from exc
         except TaskQueueUnavailable as exc:
             raise CaptionQueueUnavailableResponse() from exc
+        except CaptionProcessingUnavailable as exc:
+            raise CaptionProcessingUnavailableResponse() from exc
         if video is None:
             raise exceptions.NotFound("Video not found.")
         return Response(VideoSerializer(video).data, status=202)

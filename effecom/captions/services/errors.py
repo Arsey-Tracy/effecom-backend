@@ -30,3 +30,7 @@ class CaptionVersionConflict(Exception):
 
 class TaskQueueUnavailable(Exception):
     pass
+
+
+class CaptionProcessingUnavailable(Exception):
+    pass

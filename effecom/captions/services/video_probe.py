@@ -1,10 +1,9 @@
-import json
 import math
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import av
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
@@ -18,54 +17,62 @@ class VideoProbe:
     has_audio: bool
 
 
+def _stream_duration_seconds(stream):
+    duration = getattr(stream, "duration", None)
+    if duration is None:
+        return None
+    try:
+        seconds = float(duration) * float(stream.time_base)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _container_duration_seconds(container):
+    duration = getattr(container, "duration", None)
+    if duration is not None:
+        try:
+            seconds = float(duration) / float(av.time_base)
+        except (TypeError, ValueError, ZeroDivisionError):
+            seconds = None
+        if seconds is not None and math.isfinite(seconds) and seconds > 0:
+            return seconds
+
+    longest = None
+    for stream in container.streams:
+        seconds = _stream_duration_seconds(stream)
+        if seconds is not None and (longest is None or seconds > longest):
+            longest = seconds
+    return longest
+
+
 def probe_video(path):
-    command = [
-        settings.FFPROBE_BINARY,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration:stream=codec_type",
-        "-of",
-        "json",
-        str(path),
-    ]
     try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=settings.CAPTION_FFPROBE_TIMEOUT_SECONDS,
-            check=False,
-            shell=False,
-        )
-    except FileNotFoundError as exc:
+        container = av.open(str(path))
+    except (av.error.FFmpegError, OSError, ValueError) as exc:
         raise MediaProcessingError(
-            "FFprobe is unavailable. Install it to validate video uploads."
+            "The uploaded file is not a readable video."
         ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise MediaProcessingError("Video inspection timed out.") from exc
-    except OSError as exc:
-        raise MediaProcessingError("Video inspection could not be started.") from exc
 
-    if result.returncode != 0:
-        raise MediaProcessingError("The uploaded file is not a readable video.")
     try:
-        metadata = json.loads(result.stdout)
-        streams = metadata["streams"]
-        duration = float(metadata["format"]["duration"])
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise MediaProcessingError("The uploaded file has invalid video metadata.") from exc
+        stream_types = {
+            stream.type
+            for stream in container.streams
+            if isinstance(stream.type, str)
+        }
+        duration = _container_duration_seconds(container)
+    except (av.error.FFmpegError, OSError, ValueError) as exc:
+        raise MediaProcessingError(
+            "The uploaded file has invalid video metadata."
+        ) from exc
+    finally:
+        container.close()
 
-    if not math.isfinite(duration) or duration <= 0:
+    if not math.isfinite(duration or 0) or duration <= 0:
         raise MediaProcessingError("The uploaded video has no valid duration.")
-    if not isinstance(streams, list):
+    if not isinstance(stream_types, set) or not stream_types:
         raise MediaProcessingError("The uploaded file has invalid video metadata.")
 
-    stream_types = {
-        stream.get("codec_type")
-        for stream in streams
-        if isinstance(stream, dict)
-    }
     has_video = "video" in stream_types
     has_audio = "audio" in stream_types
     if not has_video:
