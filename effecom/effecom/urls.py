@@ -32,4 +32,5 @@ urlpatterns = [
     path("api/v1/translate/", include("translation.urls")),
     path("api/v1/tts/", include("tts.urls")),
     path("api/v1/stt/", include("stt.urls")),
+    path("api/v1/", include("captions.urls")),
 ]
