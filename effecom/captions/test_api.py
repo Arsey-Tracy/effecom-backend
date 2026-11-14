@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from unittest import skipUnless
 from unittest.mock import patch
@@ -10,9 +11,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.utils import timezone
 from kombu.exceptions import OperationalError
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
-from captions.models import CaptionTrack, Video
+from captions.models import CaptionTrack, CaptionUploadTicket, Video
 
 
 def _create_sample_video(path):
@@ -136,6 +137,90 @@ class CaptionApiTests(APITestCase):
         response = self.client.get("/api/v1/videos/")
 
         self.assertEqual(response.status_code, 401)
+
+    def test_upload_ticket_is_user_bound_and_consumed_once(self):
+        anonymous_client = APIClient()
+        unauthorized = anonymous_client.post(
+            "/api/v1/videos/upload-ticket/",
+            {},
+            format="json",
+        )
+        self.assertEqual(unauthorized.status_code, 401)
+
+        ticket_response = self.client.post(
+            "/api/v1/videos/upload-ticket/",
+            {},
+            format="json",
+        )
+        self.assertEqual(ticket_response.status_code, 201)
+        token = ticket_response.data["ticket"]
+        ticket = CaptionUploadTicket.objects.get(user=self.user)
+        self.assertNotEqual(ticket.token_hash, token)
+        self.assertGreater(ticket.expires_at, timezone.now())
+
+        upload_client = APIClient()
+        with patch("captions.views.create_video", return_value=self.video) as create:
+            response = upload_client.post(
+                "/api/v1/videos/upload/",
+                {"file": SimpleUploadedFile("clip.mp4", b"video")},
+                format="multipart",
+                HTTP_AUTHORIZATION=f"CaptionUpload {token}",
+            )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(create.call_args.kwargs["user"], self.user)
+        ticket.refresh_from_db()
+        self.assertIsNotNone(ticket.used_at)
+
+        with patch("captions.views.create_video") as create:
+            reused = upload_client.post(
+                "/api/v1/videos/upload/",
+                {"file": SimpleUploadedFile("clip.mp4", b"video")},
+                format="multipart",
+                HTTP_AUTHORIZATION=f"CaptionUpload {token}",
+            )
+        self.assertEqual(reused.status_code, 401)
+        create.assert_not_called()
+
+    def test_direct_upload_cors_preflight_allows_ticket_authorization(self):
+        response = APIClient().options(
+            "/api/v1/videos/upload/",
+            HTTP_ORIGIN="https://effecom.vercel.app",
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST",
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS="authorization,content-type",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Access-Control-Allow-Origin"],
+            "https://effecom.vercel.app",
+        )
+        self.assertIn("authorization", response["Access-Control-Allow-Headers"].lower())
+
+    def test_upload_ticket_is_scoped_to_the_direct_upload_endpoint_and_expires(self):
+        ticket_response = self.client.post(
+            "/api/v1/videos/upload-ticket/",
+            {},
+            format="json",
+        )
+        token = ticket_response.data["ticket"]
+        upload_client = APIClient()
+
+        list_response = upload_client.get(
+            "/api/v1/videos/",
+            HTTP_AUTHORIZATION=f"CaptionUpload {token}",
+        )
+        self.assertEqual(list_response.status_code, 401)
+        ticket = CaptionUploadTicket.objects.get(user=self.user)
+        self.assertIsNone(ticket.used_at)
+
+        ticket.expires_at = timezone.now() - timedelta(seconds=1)
+        ticket.save(update_fields=("expires_at",))
+        expired = upload_client.post(
+            "/api/v1/videos/upload/",
+            {"file": SimpleUploadedFile("clip.mp4", b"video")},
+            format="multipart",
+            HTTP_AUTHORIZATION=f"CaptionUpload {token}",
+        )
+        self.assertEqual(expired.status_code, 401)
 
     def test_another_user_cannot_read_or_delete_a_video(self):
         response = self.client.get(f"/api/v1/videos/{self.other_video.pk}/")

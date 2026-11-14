@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from translation.api import V1APIView
 
+from .authentication import CaptionUploadTicketAuthentication
 from .models import CaptionTrack
 from .serializers import (
     CaptionDownloadQuerySerializer,
@@ -37,6 +38,7 @@ from .services.videos import (
     queue_video,
     update_caption_track,
 )
+from .services.upload_tickets import issue_upload_ticket
 
 
 class CaptionAPIView(V1APIView):
@@ -148,6 +150,22 @@ def _stream_file(file_object, length):
     return _FileChunkIterator(file_object, length)
 
 
+def _create_video_response(request):
+    serializer = VideoUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    try:
+        video = create_video(
+            user=request.user,
+            uploaded_file=serializer.validated_data["file"],
+            title=serializer.validated_data.get("title"),
+        )
+    except DjangoValidationError as exc:
+        raise exceptions.ValidationError({"file": exc.messages}) from exc
+    except CaptionStorageError as exc:
+        raise CaptionStorageUnavailableResponse() from exc
+    return Response(VideoSerializer(video).data, status=201)
+
+
 class VideoListCreateView(CaptionAPIView):
     parser_classes = [MultiPartParser, FormParser]
 
@@ -163,19 +181,24 @@ class VideoListCreateView(CaptionAPIView):
         )
 
     def post(self, request):
-        serializer = VideoUploadSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            video = create_video(
-                user=request.user,
-                uploaded_file=serializer.validated_data["file"],
-                title=serializer.validated_data.get("title"),
-            )
-        except DjangoValidationError as exc:
-            raise exceptions.ValidationError({"file": exc.messages}) from exc
-        except CaptionStorageError as exc:
-            raise CaptionStorageUnavailableResponse() from exc
-        return Response(VideoSerializer(video).data, status=201)
+        return _create_video_response(request)
+
+
+class VideoUploadTicketView(CaptionAPIView):
+    def post(self, request):
+        token, expires_at = issue_upload_ticket(request.user)
+        return Response(
+            {"ticket": token, "expires_at": expires_at},
+            status=201,
+        )
+
+
+class DirectVideoUploadView(CaptionAPIView):
+    authentication_classes = [CaptionUploadTicketAuthentication]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        return _create_video_response(request)
 
 
 class VideoDetailView(CaptionAPIView):

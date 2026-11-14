@@ -105,3 +105,19 @@ class CaptionTrack(models.Model):
 
     def __str__(self):
         return f"{self.video.title} ({self.language})"
+
+
+class CaptionUploadTicket(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="caption_upload_tickets",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+    used_at = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Caption upload ticket for {self.user_id}"

@@ -1,17 +1,29 @@
 from django.urls import path
 
 from .views import (
+    DirectVideoUploadView,
     VideoCaptionDownloadView,
     VideoCaptionsView,
     VideoDetailView,
     VideoListCreateView,
     VideoMediaView,
     VideoProcessView,
+    VideoUploadTicketView,
 )
 
 
 urlpatterns = [
     path("videos/", VideoListCreateView.as_view(), name="caption-video-list"),
+    path(
+        "videos/upload-ticket/",
+        VideoUploadTicketView.as_view(),
+        name="caption-video-upload-ticket",
+    ),
+    path(
+        "videos/upload/",
+        DirectVideoUploadView.as_view(),
+        name="caption-video-direct-upload",
+    ),
     path(
         "videos/<uuid:video_id>/",
         VideoDetailView.as_view(),

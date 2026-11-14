@@ -352,6 +352,9 @@ def _boolean_setting(name, default):
 
 CAPTION_MAX_UPLOAD_MB = _positive_int_setting("CAPTION_MAX_UPLOAD_MB", 250)
 CAPTION_MAX_DURATION_MIN = _positive_int_setting("CAPTION_MAX_DURATION_MIN", 60)
+CAPTION_UPLOAD_TICKET_TTL_SECONDS = _positive_int_setting(
+    "CAPTION_UPLOAD_TICKET_TTL_SECONDS", 300
+)
 CAPTION_FFPROBE_TIMEOUT_SECONDS = _positive_int_setting(
     "CAPTION_FFPROBE_TIMEOUT_SECONDS", 30
 )
